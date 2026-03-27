@@ -12,14 +12,18 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/outfit": "^5.2.8",
+    "@google/generative-ai": "^0.24.1",
     "@tabler/icons-react": "^3.41.0",
     "@tailwindcss/vite": "^4.2.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "pdfjs-dist": "^5.5.207",
     "radix-ui": "^1.4.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "react-router-dom": "^7.13.2",
     "shadcn": "^4.1.1",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.1",
