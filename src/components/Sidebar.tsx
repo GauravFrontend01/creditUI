@@ -1,6 +1,6 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
-import { IconLayoutSidebar, IconHome, IconSettings, IconUsers, IconChevronLeft, IconChevronRight, IconFileText } from "@tabler/icons-react"
+import { IconLayoutSidebar, IconHome, IconSettings, IconUsers, IconChevronLeft, IconChevronRight, IconFileText, IconMessage } from "@tabler/icons-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
@@ -26,6 +26,7 @@ export function Sidebar({ expanded, setExpanded, className }: SidebarProps) {
   const items = [
     { icon: IconHome, label: "Home", href: "/" },
     { icon: IconFileText, label: "Statements", href: "/statement" },
+    { icon: IconMessage, label: "Krishna Chat", href: "/chat" },
     { icon: IconUsers, label: "Users", href: "/users" },
     { icon: IconSettings, label: "Settings", href: "/settings" },
   ]
