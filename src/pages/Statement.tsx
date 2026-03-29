@@ -1,9 +1,10 @@
-import * as React from "react"
-import { useNavigate } from "react-router-dom"
+import React, { useState, useEffect, useRef } from "react"
+import { useNavigate, useParams } from "react-router-dom"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
-import { IconDownload, IconCheck } from "@tabler/icons-react"
+import { IconDownload, IconCheck, IconArrowLeft, IconFileOff } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
+import axios from "axios"
 
 import * as pdfjsLib from "pdfjs-dist"
 
@@ -12,61 +13,107 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url"
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
 export default function Statement() {
-  const [extraction, setExtraction] = React.useState<any>(null)
-  const [pdfName, setPdfName] = React.useState("")
-  const [activeBox, setActiveBox] = React.useState<{ box: number[], page: number, id: string | number } | null>(null)
-  const [pages, setPages] = React.useState<string[]>([])
-  const [loadingPdf, setLoadingPdf] = React.useState(true)
-  const [linePath, setLinePath] = React.useState<string>("")
+  const [extraction, setExtraction] = useState<any>(null)
+  const [pdfName, setPdfName] = useState("")
+  const [activeBox, setActiveBox] = useState<{ box: number[], page: number, id: string | number } | null>(null)
+  const [pages, setPages] = useState<string[]>([])
+  const [loadingPdf, setLoadingPdf] = useState(false)
+  const [linePath, setLinePath] = useState<string>("")
+  const [isSavedView, setIsSavedView] = useState(false)
   
+  const { id } = useParams()
   const navigate = useNavigate()
-  const rootRef = React.useRef<HTMLDivElement>(null)
-  const pdfPaneRef = React.useRef<HTMLDivElement>(null)
-  const tablePaneRef = React.useRef<HTMLDivElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const pdfPaneRef = useRef<HTMLDivElement>(null)
+  const tablePaneRef = useRef<HTMLDivElement>(null)
 
-  React.useEffect(() => {
-    const rawResult = sessionStorage.getItem("extraction_result")
-    const rawName = sessionStorage.getItem("pdf_raw_name")
-    const pdfBase64 = sessionStorage.getItem("pdf_base64")
-    const pdfPassword = sessionStorage.getItem("pdf_password")
-    
-    if (rawResult && pdfBase64) {
-      setExtraction(JSON.parse(rawResult))
-      setPdfName(rawName || "statement.pdf")
-      loadPdf(pdfBase64, pdfPassword || "")
-    } else {
-      navigate("/")
+  useEffect(() => {
+    const fetchData = async () => {
+      if (id) {
+        // Saved Statement View
+        try {
+          setIsSavedView(true)
+          const response = await axios.get(`/api/statements/${id}`)
+          const data = response.data
+          setExtraction(data)
+          setPdfName(data.bankName || "Saved Statement")
+          
+          // Load PDF from Supabase Storage URL if available
+          if (data.pdfStorageUrl) {
+            loadPdfFromUrl(data.pdfStorageUrl, data.pdfPassword || "")
+          }
+        } catch (err) {
+          console.error("Failed to fetch statement detail", err)
+          navigate("/statements")
+        }
+      } else {
+        // Fresh Analysis View (from session)
+        const rawResult = sessionStorage.getItem("extraction_result")
+        const rawName = sessionStorage.getItem("pdf_raw_name")
+        const pdfBase64 = sessionStorage.getItem("pdf_base64")
+        const pdfPassword = sessionStorage.getItem("pdf_password")
+        
+        if (rawResult && pdfBase64) {
+          setExtraction(JSON.parse(rawResult))
+          setPdfName(rawName || "statement.pdf")
+          // Fresh view: base64 data URL from sessionStorage
+          loadPdfFromBase64(pdfBase64, pdfPassword || "")
+        } else {
+          navigate("/")
+        }
+      }
     }
-  }, [navigate])
+    
+    fetchData()
+  }, [id, navigate])
 
-  const loadPdf = async (base64: string, password?: string) => {
+  // Shared PDF renderer — accepts an ArrayBuffer
+  const renderPdfBuffer = async (buffer: ArrayBuffer, password?: string) => {
+    setLoadingPdf(true)
     try {
-      setLoadingPdf(true)
-      const loadingTask = pdfjsLib.getDocument({ 
-        url: base64, 
-        password: password 
-      })
+      const loadingTask = pdfjsLib.getDocument({ data: buffer, password: password || '' })
       const pdf = await loadingTask.promise
       const renderedPages: string[] = []
-      
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i)
-        const viewport = page.getViewport({ scale: 1.5 }) 
+        const viewport = page.getViewport({ scale: 1.5 })
         const canvas = document.createElement("canvas")
         const context = canvas.getContext("2d")!
         canvas.height = viewport.height
         canvas.width = viewport.width
-        
-        await page.render({ 
-          canvasContext: context, 
-          viewport: viewport 
-        } as any).promise
+        await page.render({ canvasContext: context, viewport: viewport } as any).promise
         renderedPages.push(canvas.toDataURL())
       }
       setPages(renderedPages)
-      setLoadingPdf(false)
     } catch (err) {
-      console.error("PDF load failed in Statement view", err)
+      console.error("PDF render failed", err)
+    } finally {
+      setLoadingPdf(false)
+    }
+  }
+
+  // For saved view: fetch from Supabase URL then render
+  const loadPdfFromUrl = async (url: string, password?: string) => {
+    try {
+      const res = await fetch(url)
+      const buffer = await res.arrayBuffer()
+      await renderPdfBuffer(buffer, password)
+    } catch (err) {
+      console.error("PDF fetch from URL failed", err)
+      setLoadingPdf(false)
+    }
+  }
+
+  // For fresh view: base64 data URL → ArrayBuffer
+  const loadPdfFromBase64 = async (base64DataUrl: string, password?: string) => {
+    try {
+      const base64 = base64DataUrl.split(',')[1]
+      const binary = atob(base64)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+      await renderPdfBuffer(bytes.buffer, password)
+    } catch (err) {
+      console.error("PDF base64 decode failed", err)
       setLoadingPdf(false)
     }
   }
@@ -158,6 +205,42 @@ export default function Statement() {
     }
   }
 
+  const handleApprove = async () => {
+    try {
+      // Retrieve PDF binary from sessionStorage (stored as base64 data URL)
+      const pdfBase64DataUrl = sessionStorage.getItem("pdf_base64")
+      const pdfPassword = sessionStorage.getItem("pdf_password") || ""
+      const rawName = sessionStorage.getItem("pdf_raw_name") || "statement.pdf"
+
+      if (!pdfBase64DataUrl) {
+        throw new Error("PDF not found in session. Please re-upload the file.")
+      }
+
+      // Convert base64 data URL → Blob → File
+      const base64 = pdfBase64DataUrl.split(',')[1]
+      const binary = atob(base64)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+      const pdfBlob = new Blob([bytes], { type: 'application/pdf' })
+      const pdfFile = new File([pdfBlob], rawName, { type: 'application/pdf' })
+
+      // Send as multipart/form-data — NO base64 in JSON body
+      const formData = new FormData()
+      formData.append('pdf', pdfFile)
+      formData.append('data', JSON.stringify(extraction))
+      formData.append('pdfPassword', pdfPassword)
+
+      await axios.post("/api/statements", formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+
+      navigate("/statements")
+    } catch (err: any) {
+      console.error("Failed to approve statement", err)
+      alert("Failed to save statement: " + (err.message || "Please try again."))
+    }
+  };
+
   return (
     <div className="flex w-full h-full bg-slate-50 overflow-hidden font-sans relative" ref={rootRef}>
       {/* Dynamic Connector SVG */}
@@ -177,9 +260,19 @@ export default function Statement() {
       <div className="w-1/2 flex flex-col border-r bg-slate-200/50 relative overflow-hidden h-full shrink-0">
         {/* Simple Toolbar */}
         <div className="h-14 bg-white border-b px-6 flex items-center justify-between shrink-0">
-           <div className="flex gap-4">
+           <div className="flex gap-4 items-center">
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="h-8 w-8 text-slate-400 hover:text-slate-900"
+                onClick={() => navigate(isSavedView ? "/statements" : "/")}
+              >
+                <IconArrowLeft size={18} />
+              </Button>
+              <div className="h-4 w-[1px] bg-slate-200 mx-1" />
               <span className="text-[11px] font-bold text-slate-800 tracking-tight flex items-center gap-2">
-                 <IconCheck className="text-primary" size={16} /> DATA VERIFIED
+                 <IconCheck className={cn(isSavedView ? "text-green-500" : "text-primary")} size={16} /> 
+                 {isSavedView ? "AUDIT ARCHIVED" : "DATA VERIFIED"}
               </span>
            </div>
            <div className="text-[12px] font-medium text-slate-500 truncate max-w-[240px]">
@@ -191,8 +284,25 @@ export default function Statement() {
         </div>
         
         <div className="flex-1 overflow-y-auto" ref={pdfPaneRef}>
-            <div className="p-8 space-y-6 flex flex-col items-center">
-                {loadingPdf ? (
+            <div className="p-8 space-y-6 flex flex-col items-center min-h-full">
+                {isSavedView && loadingPdf ? (
+                    <div className="flex flex-col items-center justify-center py-40 gap-3">
+                        <div className="h-10 w-10 border-2 border-primary/20 border-t-primary animate-spin rounded-full" />
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fetching & Decrypting PDF...</p>
+                    </div>
+                ) : isSavedView && pages.length === 0 ? (
+                   <div className="flex-1 flex flex-col items-center justify-center py-40 gap-4 text-center opacity-40">
+                       <div className="h-20 w-20 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                         <IconFileOff size={40} />
+                       </div>
+                       <div className="space-y-1">
+                         <p className="text-sm font-bold text-slate-900 uppercase tracking-widest">PDF Could Not Be Loaded</p>
+                         <p className="text-xs font-semibold text-slate-500 max-w-[240px]">
+                           The stored PDF URL may have expired or Supabase storage is misconfigured.
+                         </p>
+                       </div>
+                   </div>
+                ) : loadingPdf ? (
                     <div className="flex flex-col items-center justify-center py-40 gap-3">
                         <div className="h-10 w-10 border-2 border-primary/20 border-t-primary animate-spin rounded-full" />
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Rendering Pages...</p>
@@ -232,7 +342,9 @@ export default function Statement() {
           <div className="p-8 border-b space-y-8 bg-white shrink-0">
              <div className="flex items-center justify-between">
                 <div>
-                   <h2 className="text-2xl font-bold tracking-tight text-slate-900">Spatial Data Audit</h2>
+                   <h2 className="text-2xl font-bold tracking-tight text-slate-900">
+                      {isSavedView ? "Audit History" : "Spatial Data Audit"}
+                   </h2>
                    <p className="text-xs font-semibold text-slate-400 mt-0.5 uppercase tracking-wide">Statement Transaction Log</p>
                 </div>
                 <div className="flex gap-8">
@@ -317,13 +429,31 @@ export default function Statement() {
                     <Button variant="outline" className="h-12 px-6 font-bold text-xs uppercase tracking-wide rounded-lg">
                         Flag Entry
                     </Button>
-                    <Button className="h-12 px-10 font-bold text-sm uppercase tracking-wide rounded-lg shadow-sm">
-                        Approve Report
-                    </Button>
+                    {!isSavedView && <PrimaryApproveButton onApprove={handleApprove} />}
                 </div>
              </div>
           </div>
       </div>
     </div>
   )
+}
+
+function PrimaryApproveButton({ onApprove }: { onApprove: () => void }) {
+  const [loading, setLoading] = React.useState(false);
+  
+  const handleClick = async () => {
+    setLoading(true);
+    await onApprove();
+    setLoading(false);
+  };
+
+  return (
+    <Button 
+      onClick={handleClick}
+      disabled={loading}
+      className="h-12 px-10 font-bold text-sm uppercase tracking-wide rounded-lg shadow-sm"
+    >
+      {loading ? "Saving..." : "Approve Report"}
+    </Button>
+  );
 }

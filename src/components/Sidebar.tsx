@@ -1,6 +1,7 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
-import { IconLayoutSidebar, IconHome, IconSettings, IconUsers, IconChevronLeft, IconChevronRight, IconFileText, IconMessage } from "@tabler/icons-react"
+import { useAuth } from "@/context/AuthContext"
+import { IconLayoutSidebar, IconHome, IconSettings, IconUsers, IconChevronLeft, IconChevronRight, IconFileText, IconMessage, IconLogout } from "@tabler/icons-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
@@ -12,6 +13,7 @@ export interface SidebarProps extends React.HTMLAttributes<HTMLDivElement> {
 export function Sidebar({ expanded, setExpanded, className }: SidebarProps) {
   const [isExpanded, setIsExpanded] = React.useState(false)
   const location = useLocation()
+  const { user, logout } = useAuth()
   
   // Use controlled or internal state
   const activeExpanded = expanded !== undefined ? expanded : isExpanded
@@ -25,7 +27,7 @@ export function Sidebar({ expanded, setExpanded, className }: SidebarProps) {
 
   const items = [
     { icon: IconHome, label: "Home", href: "/" },
-    { icon: IconFileText, label: "Statements", href: "/statement" },
+    { icon: IconFileText, label: "My Statements", href: "/statements" },
     { icon: IconMessage, label: "Krishna Chat", href: "/chat" },
     { icon: IconUsers, label: "Users", href: "/users" },
     { icon: IconSettings, label: "Settings", href: "/settings" },
@@ -81,7 +83,27 @@ export function Sidebar({ expanded, setExpanded, className }: SidebarProps) {
          </nav>
       </div>
 
-      <div className="border-t p-2">
+      <div className="border-t p-2 space-y-1">
+        {user && activeExpanded && (
+          <div className="px-2 py-2 mb-2 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <p className="text-xs font-semibold text-primary/70 uppercase tracking-wider mb-1">Signed in as</p>
+            <p className="text-sm font-medium text-foreground truncate">{user.name}</p>
+            <p className="text-xs text-muted-foreground truncate">{user.email}</p>
+          </div>
+        )}
+
+        <Button 
+          variant="ghost" 
+          onClick={logout}
+          className={cn(
+            "w-full h-10 flex items-center rounded-xl hover:bg-destructive/10 hover:text-destructive transition-all duration-200",
+            !activeExpanded && "justify-center px-0"
+          )}
+        >
+          <IconLogout size={20} className={activeExpanded ? "mr-3" : ""} />
+          {activeExpanded && <span>Logout</span>}
+        </Button>
+
         <Button 
           variant="ghost" 
           size="icon" 

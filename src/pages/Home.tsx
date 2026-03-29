@@ -1,4 +1,4 @@
-import * as React from "react"
+import React, { useState, useEffect, useRef } from "react"
 import { IconUpload, IconFileTypePdf, IconRocket, IconLoader2, IconSparkles, IconScan, IconDatabase, IconCheck, IconLock, IconSettings, IconDeviceFloppy } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -22,16 +22,16 @@ const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || ""
 const ai = new GoogleGenerativeAI(API_KEY)
 
 export default function Home() {
-  const [selectedFile, setSelectedFile] = React.useState<File | null>(null)
-  const [isExtracting, setIsExtracting] = React.useState(false)
-  const [currentStep, setCurrentStep] = React.useState(0)
-  const [showPasswordDialog, setShowPasswordDialog] = React.useState(false)
-  const [password, setPassword] = React.useState("260703835732")
-  const [errorHeader, setErrorHeader] = React.useState("")
-  const [useLiveApi, setUseLiveApi] = React.useState(false)
-  const [lastApiResult, setLastApiResult] = React.useState<any>(null)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [isExtracting, setIsExtracting] = useState(false)
+  const [currentStep, setCurrentStep] = useState(0)
+  const [showPasswordDialog, setShowPasswordDialog] = useState(false)
+  const [password, setPassword] = useState("260703835732")
+  const [errorHeader, setErrorHeader] = useState("")
+  const [useLiveApi, setUseLiveApi] = useState(false)
+  const [lastApiResult, setLastApiResult] = useState<any>(null)
 
-  const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
 
   const extractionSteps = [
@@ -187,15 +187,20 @@ Return ONLY valid JSON in this exact structure:
     "summary": "Monthly credit audit cycle completed."
   }
 
+  const [isReadingFile, setIsReadingFile] = useState(false)
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0]
       setSelectedFile(file)
+      setIsReadingFile(true)
       try {
         const arrayBuffer = await file.arrayBuffer()
         const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer })
         await loadingTask.promise
+        setIsReadingFile(false)
       } catch (err: any) {
+        setIsReadingFile(false)
         if (err.name === "PasswordException") {
           setShowPasswordDialog(true)
         }
@@ -233,6 +238,15 @@ Return ONLY valid JSON in this exact structure:
     return imagesForAI
   }
 
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
   const startExtraction = async (pdfPassword?: string) => {
     if (!selectedFile) return
     setIsExtracting(true)
@@ -240,7 +254,12 @@ Return ONLY valid JSON in this exact structure:
     setErrorHeader("")
     
     try {
+      // 1. Convert PDF to images for AI
       const imagesForAI = await convertPdfToImages(selectedFile, pdfPassword)
+      
+      // 2. Read full PDF as base64 for later storage
+      const pdfBase64 = await readFileAsBase64(selectedFile)
+      
       let finalResponse: any = null
 
       if (useLiveApi) {
@@ -271,16 +290,13 @@ Return ONLY valid JSON in this exact structure:
         await new Promise(resolve => setTimeout(resolve, 800))
       }
 
+      // Save all to session for the result page
       sessionStorage.setItem("extraction_result", JSON.stringify(finalResponse))
       sessionStorage.setItem("pdf_raw_name", selectedFile.name)
       sessionStorage.setItem("pdf_password", pdfPassword || "")
+      sessionStorage.setItem("pdf_base64", pdfBase64)
       
-      const reader = new FileReader();
-      reader.onload = () => {
-        sessionStorage.setItem("pdf_base64", reader.result as string);
-        navigate("/statement")
-      };
-      reader.readAsDataURL(selectedFile);
+      navigate("/statement")
       
     } catch (err: any) {
       console.error(err)
@@ -353,8 +369,9 @@ Return ONLY valid JSON in this exact structure:
               className={cn(
                 "group relative cursor-pointer border-2 border-dashed rounded-[2.5rem] p-16 transition-all duration-300",
                 selectedFile
-                  ? "bg-white border-primary shadow-xl"
-                  : "bg-white/50 border-slate-200 hover:border-primary/50 hover:bg-white hover:shadow-xl"
+                   ? "bg-white border-primary shadow-xl"
+                   : "bg-white/50 border-slate-200 hover:border-primary/50 hover:bg-white hover:shadow-xl",
+                isReadingFile && "pointer-events-none opacity-50"
               )}
             >
               <input
@@ -367,10 +384,19 @@ Return ONLY valid JSON in this exact structure:
 
               <div className="space-y-6 text-center">
                 <div className="mx-auto w-20 h-20 rounded-full bg-slate-50 flex items-center justify-center border group-hover:bg-primary group-hover:text-primary-foreground transition-all duration-300 shadow-sm">
-                  <IconUpload size={32} />
+                   {isReadingFile ? (
+                     <IconLoader2 className="animate-spin" size={32} />
+                   ) : (
+                     <IconUpload size={32} />
+                   )}
                 </div>
 
-                {selectedFile ? (
+                {isReadingFile ? (
+                  <div className="space-y-2">
+                    <p className="text-xl font-bold text-slate-800 tracking-tight">Scanning PDF...</p>
+                    <p className="text-sm font-medium text-slate-400 uppercase tracking-widest text-[10px]">Analyzing document structure</p>
+                  </div>
+                ) : selectedFile ? (
                   <div className="space-y-2">
                     <p className="text-xl font-bold text-slate-800">File Selected</p>
                     <Badge variant="outline" className="text-xs px-5 py-2 rounded-full bg-green-50 text-green-700 border-green-200 flex mx-auto w-fit gap-2">
