@@ -22,7 +22,7 @@ import {
   IconSearch,
   IconPlus,
   IconLoader2,
-  IconEye,
+  IconTrash,
   IconChevronLeft,
   IconChevronRight,
   IconCreditCard,
@@ -200,27 +200,55 @@ const columns: ColumnDef<Statement>[] = [
   {
     id: "actions",
     header: () => null,
-    cell: () => (
-      <div className="flex justify-end pr-2">
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-8 gap-1.5 text-xs font-bold text-slate-500 hover:text-primary hover:bg-primary/5 rounded-lg px-3"
-          onClick={(e) => {
-            e.stopPropagation()
-            // navigate handled by row click
-          }}
-        >
-          <IconEye size={14} />
-          View
-        </Button>
-      </div>
-    ),
+    cell: ({ row }) => {
+      const id = row.original._id
+      const name = row.original.bankName
+      return (
+        <div className="flex justify-end pr-2" onClick={(e) => e.stopPropagation()}>
+          <DeleteButton statementId={id} bankName={name} />
+        </div>
+      )
+    },
     enableSorting: false,
   },
 ]
 
-// ── Summary Stat Card ──────────────────────────────────────────────────────
+// ── Delete Button ──────────────────────────────────────────────────────────
+function DeleteButton({ statementId, bankName }: { statementId: string; bankName: string }) {
+  const [deleting, setDeleting] = React.useState(false)
+
+  const handleDelete = async () => {
+    if (!window.confirm(`Delete "${bankName}"? This will also remove the PDF from storage.`)) return
+    setDeleting(true)
+    try {
+      await axios.delete(`/api/statements/${statementId}`)
+      // Dispatch a custom event so the page re-fetches
+      window.dispatchEvent(new CustomEvent('statement-deleted', { detail: statementId }))
+    } catch (err) {
+      console.error('Delete failed', err)
+      alert('Failed to delete. Please try again.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      disabled={deleting}
+      onClick={handleDelete}
+      className="h-8 gap-1.5 text-xs font-bold text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg px-3 transition-colors"
+    >
+      {deleting
+        ? <IconLoader2 size={14} className="animate-spin" />
+        : <IconTrash size={14} />}
+      {deleting ? 'Deleting...' : 'Delete'}
+    </Button>
+  )
+}
+
+
 function StatCard({
   icon: Icon,
   label,
@@ -272,6 +300,16 @@ export default function StatementsList() {
       }
     }
     fetch_()
+  }, [])
+
+  // Remove deleted row from state instantly without refetch
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const id = (e as CustomEvent).detail
+      setStatements((prev) => prev.filter((s) => s._id !== id))
+    }
+    window.addEventListener('statement-deleted', handler)
+    return () => window.removeEventListener('statement-deleted', handler)
   }, [])
 
   const table = useReactTable({

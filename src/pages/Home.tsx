@@ -63,6 +63,7 @@ international merchant.
 Return ONLY valid JSON in this exact structure:
 {
   "currency": string,
+  "bankName": string,
   "creditLimit": { "val": number, "box": [], "page": number },
   "availableLimit": { "val": number, "box": [], "page": number },
   "outstandingTotal": { "val": number, "box": [], "page": number },
