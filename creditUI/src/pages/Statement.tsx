@@ -6,7 +6,7 @@ import {
   IconDownload, IconArrowLeft, IconFileOff, IconLoader2,
   IconReceipt2, IconChartBar, IconCreditCard, IconCalendar,
   IconTrendingDown, IconTrendingUp, IconGift, IconShieldCheck, IconAlertTriangle, IconShieldX,
-  IconArrowUp, IconArrowDown, IconArrowsUpDown, IconCheck
+  IconArrowUp, IconArrowDown, IconArrowsUpDown, IconCheck, IconX, IconEqual, IconPlus, IconMinus, IconMath
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -80,6 +80,7 @@ interface StatementData {
   isApproved?: boolean
   extractionQuality?: 'verified' | 'minor_mismatch' | 'extraction_error' | 'unverified'
   reconciliation?: any
+  reconciliationSummary?: any
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -316,6 +317,7 @@ export default function Statement() {
   const [txGlobalFilter, setTxGlobalFilter] = useState("")
   const [activeFooterFilter, setActiveFooterFilter] = useState<'debit' | 'credit' | 'fees' | null>(null)
   const [toast, setToast] = useState<{message: string, visible: boolean, type: 'success' | 'error'}>({ message: "", visible: false, type: 'success' })
+  const [showMathDetails, setShowMathDetails] = useState(false);
 
   const { id } = useParams()
   const navigate = useNavigate()
@@ -686,11 +688,13 @@ export default function Statement() {
                )}
 
                {isSavedView && data.status === 'COMPLETED' && (
-                 <div className={cn("flex flex-col items-end gap-1 px-4 py-1.5 rounded-xl border border-l-4", 
-                   data.extractionQuality === 'verified' ? "bg-emerald-50 border-emerald-100 border-l-emerald-500" :
-                   data.extractionQuality === 'minor_mismatch' ? "bg-amber-50 border-amber-100 border-l-amber-500" :
-                   data.extractionQuality === 'extraction_error' ? "bg-red-50 border-red-100 border-l-red-500" :
-                   "bg-slate-50 border-slate-100 border-l-slate-400"
+                 <div 
+                   onClick={() => setShowMathDetails(true)}
+                   className={cn("flex flex-col items-end gap-1 px-4 py-1.5 rounded-xl border border-l-4 cursor-pointer hover:shadow-md transition-all active:scale-95", 
+                   data.extractionQuality === 'verified' ? "bg-emerald-50 border-emerald-100 border-l-emerald-500 hover:bg-emerald-100/50" :
+                   data.extractionQuality === 'minor_mismatch' ? "bg-amber-50 border-amber-100 border-l-amber-500 hover:bg-amber-100/50" :
+                   data.extractionQuality === 'extraction_error' ? "bg-red-50 border-red-100 border-l-red-500 hover:bg-red-100/50" :
+                   "bg-slate-50 border-slate-100 border-l-slate-400 hover:bg-slate-100"
                  )}>
                     <div className="flex items-center gap-2">
                       {data.extractionQuality === 'verified' && <IconShieldCheck size={14} className="text-emerald-600" />}
@@ -1073,6 +1077,87 @@ export default function Statement() {
           </div>
         </div>
       )}
+      {/* Math Transparency Modal */}
+      {showMathDetails && data?.reconciliation && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-200">
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowMathDetails(false)} />
+          <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-slate-100">
+            <div className="px-8 py-6 border-b border-slate-100 flex items-center justify-between">
+               <div className="flex items-center gap-3">
+                 <div className={cn("p-2 rounded-xl", 
+                   data.extractionQuality === 'verified' ? "bg-emerald-100 text-emerald-600" :
+                   data.extractionQuality === 'minor_mismatch' ? "bg-amber-100 text-amber-600" :
+                   "bg-red-100 text-red-600"
+                 )}>
+                   <IconMath size={20} strokeWidth={2.5} />
+                 </div>
+                 <div>
+                   <h3 className="text-xl font-black text-slate-800 tracking-tight">Mathematical Proof</h3>
+                   <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Automated Reconciliation Engine</p>
+                 </div>
+               </div>
+               <button onClick={() => setShowMathDetails(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors">
+                 <IconX size={20} />
+               </button>
+            </div>
+
+            <div className="p-8 space-y-8 bg-slate-50/50">
+               {/* Equation Grid */}
+               <div className="grid grid-cols-5 items-center gap-4 text-center">
+                 <div className="flex flex-col gap-2">
+                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Opening<br/>Balance</span>
+                   <span className="text-base font-black tabular-nums">{fmt(data.reconciliationSummary?.openingBalance || 0, sym)}</span>
+                 </div>
+                 <div className="flex items-center justify-center text-slate-300"><IconPlus size={20} /></div>
+                 <div className="flex flex-col gap-2">
+                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Extracted<br/>Debits</span>
+                   <span className="text-base font-black tabular-nums text-red-600">{fmt(data.reconciliation.extractedDebits || 0, sym)}</span>
+                 </div>
+                 <div className="flex items-center justify-center text-slate-300"><IconMinus size={20} /></div>
+                 <div className="flex flex-col gap-2">
+                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Extracted<br/>Credits</span>
+                   <span className="text-base font-black tabular-nums text-emerald-600">{fmt(data.reconciliation.extractedCredits || 0, sym)}</span>
+                 </div>
+               </div>
+
+               <div className="rounded-2xl bg-white border border-slate-200 p-6 flex items-center justify-between shadow-sm">
+                 <div className="flex flex-col gap-1 w-1/3">
+                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Calculated Net</span>
+                   <span className="text-2xl font-black tabular-nums text-slate-800">{fmt(data.reconciliation.calculatedClosing || 0, sym)}</span>
+                 </div>
+                 <div className="w-1/3 flex justify-center text-slate-300"><IconEqual size={32} /></div>
+                 <div className="flex flex-col gap-1 w-1/3 text-right">
+                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Statement Match</span>
+                   <span className={cn("text-2xl font-black tabular-nums",
+                      data.reconciliation.balanceDelta === 0 ? "text-emerald-500" :
+                      data.reconciliation.balanceDelta < 10 ? "text-amber-500" : "text-red-500"
+                   )}>
+                     {fmt(data.reconciliation.expectedClosing || 0, sym)}
+                   </span>
+                 </div>
+               </div>
+
+               {/* Delta Banner */}
+               <div className={cn("px-6 py-4 rounded-xl flex items-center justify-between border",
+                 data.reconciliation.balanceDelta === 0 ? "bg-emerald-50 border-emerald-100" :
+                 data.reconciliation.balanceDelta < 10 ? "bg-amber-50 border-amber-100" : "bg-red-50 border-red-100"
+               )}>
+                 <span className={cn("text-sm font-bold", 
+                   data.reconciliation.balanceDelta === 0 ? "text-emerald-800" :
+                   data.reconciliation.balanceDelta < 10 ? "text-amber-800" : "text-red-800"
+                 )}>
+                   {data.reconciliation.balanceDelta === 0 ? "Extraction mathematically flawless." : `Discrepancy of ${fmt(data.reconciliation.balanceDelta, sym)} detected.`}
+                 </span>
+                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-white/50 px-3 py-1.5 rounded-lg">
+                   Found {data.reconciliation.transactionCount} entries
+                 </span>
+               </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
