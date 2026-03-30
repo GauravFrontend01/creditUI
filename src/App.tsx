@@ -8,7 +8,6 @@ import Signup from "@/pages/Signup"
 import StatementsList from "@/pages/StatementsList"
 import TesseractOCR from "@/pages/TesseractOCR"
 import { AuthProvider } from "@/context/AuthContext"
-import { ProtectedRoute } from "@/components/ProtectedRoute"
 
 export function App() {
   return (
@@ -20,18 +19,16 @@ export function App() {
           <Route
             path="/*"
             element={
-              <ProtectedRoute>
-                <DashboardLayout>
-                  <Routes>
-                    <Route path="/" element={<Home />} />
-                    <Route path="/statement" element={<Statement />} />
-                    <Route path="/statements" element={<StatementsList />} />
-                    <Route path="/statements/:id" element={<Statement />} />
-                    <Route path="/chat" element={<Chat />} />
-                    <Route path="/tersract" element={<TesseractOCR />} />
-                  </Routes>
-                </DashboardLayout>
-              </ProtectedRoute>
+              <DashboardLayout>
+                <Routes>
+                  <Route path="/" element={<Home />} />
+                  <Route path="/statement" element={<Statement />} />
+                  <Route path="/statements" element={<StatementsList />} />
+                  <Route path="/statements/:id" element={<Statement />} />
+                  <Route path="/chat" element={<Chat />} />
+                  <Route path="/tersract" element={<TesseractOCR />} />
+                </Routes>
+              </DashboardLayout>
             }
           />
         </Routes>
