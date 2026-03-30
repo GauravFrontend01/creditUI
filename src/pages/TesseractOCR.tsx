@@ -616,7 +616,12 @@ export default function TesseractOCR() {
                   !file ? "bg-white/5 border border-white/10 text-slate-500" : "bg-gradient-to-r from-blue-600 to-indigo-600 shadow-xl shadow-blue-500/20 border-none text-white"
                 )}
               >
-                {isProcessing ? "Processing..." : "Run OCR Extraction"}
+                {isProcessing ? (
+                  <div className="flex items-center gap-2">
+                    <IconLoader2 className="animate-spin" size={20} />
+                    Processing Statement...
+                  </div>
+                ) : "Run OCR Extraction"}
               </Button>
             ) : (
               <Button 
@@ -627,12 +632,12 @@ export default function TesseractOCR() {
                 {isAnalyzing ? (
                   <>
                     <IconLoader2 className="animate-spin" size={24} />
-                    AI MAPPING IN PROGRESS...
+                    MAPPING DATA...
                   </>
                 ) : (
                   <>
                     <IconSparkles size={24} />
-                    ANALYZE WITH GEMINI AI
+                    GENERATE AUDIT REPORT
                   </>
                 )}
               </Button>

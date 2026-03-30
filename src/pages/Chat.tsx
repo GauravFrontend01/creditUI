@@ -246,9 +246,9 @@ const Chat: React.FC = () => {
     try {
       const groqApiKey = import.meta.env.VITE_GROQ_API_KEY
       if (!groqApiKey || groqApiKey === "YOUR_GROQ_API_KEY") {
-        setMessages(prev => [...prev, { 
-          role: "assistant", 
-          content: "Yaar, Groq API key set nahi hai. .env file mein daal de pehle." 
+        setMessages(prev => [...prev, {
+          role: "assistant",
+          content: "Yaar, Groq API key set nahi hai. .env file mein daal de pehle."
         }])
         setIsLoading(false)
         return
@@ -261,7 +261,7 @@ const Chat: React.FC = () => {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
+          model: "groq/compound",
           messages: [
             { role: "system", content: KRISHNA_PROMPT },
             ...newMessages.map(m => ({ role: m.role, content: m.content }))
@@ -283,9 +283,9 @@ const Chat: React.FC = () => {
       }
     } catch (error) {
       console.error("Error calling Groq:", error)
-      setMessages(prev => [...prev, { 
-        role: "assistant", 
-        content: "Bhai, kuch gadbad ho gayi AI ke saath. Phir se try kar?" 
+      setMessages(prev => [...prev, {
+        role: "assistant",
+        content: "Bhai, kuch gadbad ho gayi AI ke saath. Phir se try kar?"
       }])
     } finally {
       setIsLoading(false)
@@ -299,7 +299,7 @@ const Chat: React.FC = () => {
         <CardHeader className="border-b px-6 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary border border-primary/20 shadow-inner">
-               <IconRobot size={22} className="animate-pulse" />
+              <IconRobot size={22} className="animate-pulse" />
             </div>
             <div>
               <CardTitle className="text-xl font-semibold tracking-tight">Krishna</CardTitle>
@@ -310,7 +310,7 @@ const Chat: React.FC = () => {
             </div>
           </div>
         </CardHeader>
-        
+
         <CardContent className="flex-1 overflow-hidden p-0">
           <ScrollArea ref={scrollAreaRef} className="h-full px-6 py-4">
             <div className="flex flex-col gap-4">
@@ -341,8 +341,8 @@ const Chat: React.FC = () => {
                     <div
                       className={cn(
                         "rounded-2xl px-4 py-2.5 text-sm shadow-sm ring-1 ring-inset transition-all",
-                        m.role === "user" 
-                          ? "bg-primary text-primary-foreground ring-primary/20 rounded-br-none" 
+                        m.role === "user"
+                          ? "bg-primary text-primary-foreground ring-primary/20 rounded-br-none"
                           : "bg-card text-card-foreground ring-border/50 rounded-bl-none"
                       )}
                     >
@@ -384,9 +384,9 @@ const Chat: React.FC = () => {
               onChange={(e) => setInput(e.target.value)}
               className="flex-1 bg-background border-border/50 focus-visible:ring-primary/20 rounded-xl h-11"
             />
-            <Button 
-              type="submit" 
-              size="icon" 
+            <Button
+              type="submit"
+              size="icon"
               disabled={!input.trim() || isLoading}
               className="rounded-xl h-11 w-11 shrink-0 bg-primary hover:bg-primary/90 transition-all active:scale-95"
             >
