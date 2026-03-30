@@ -76,7 +76,32 @@ const statementSchema = new mongoose.Schema({
 
   // ── AI Narrative ───────────────────────────────────────────────────────────
   summary:        String,
-  reconciliation: String,
+  
+  // ── Reconciliation Engine ──────────────────────────────────────────────────
+  reconciliationSummary: {
+    openingBalance: Number,
+    closingBalance: Number,
+    totalDebits: Number,
+    totalCredits: Number,
+    transactionCount: Number
+  },
+  reconciliation: {
+    matched: Boolean,
+    balanceDelta: Number,
+    debitDelta: Number,
+    creditDelta: Number,
+    calculatedClosing: Number,
+    expectedClosing: Number,
+    extractedDebits: Number,
+    extractedCredits: Number,
+    transactionCount: Number,
+    checkedAt: Date
+  },
+  extractionQuality: {
+    type: String,
+    enum: ['unverified', 'verified', 'minor_mismatch', 'extraction_error'],
+    default: 'unverified'
+  },
 
   // ── PDF Storage ────────────────────────────────────────────────────────────
   pdfStorageUrl: String,

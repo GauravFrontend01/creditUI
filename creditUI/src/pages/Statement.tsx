@@ -5,8 +5,8 @@ import { cn } from "@/lib/utils"
 import {
   IconDownload, IconArrowLeft, IconFileOff, IconLoader2,
   IconReceipt2, IconChartBar, IconCreditCard, IconCalendar,
-  IconTrendingDown, IconTrendingUp, IconGift,
-  IconArrowUp, IconArrowDown, IconArrowsUpDown, IconAlertTriangle, IconCheck
+  IconTrendingDown, IconTrendingUp, IconGift, IconShieldCheck, IconAlertTriangle, IconShieldX,
+  IconArrowUp, IconArrowDown, IconArrowsUpDown, IconCheck
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -78,6 +78,8 @@ interface StatementData {
   pdfPassword?: string
   status?: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED"
   isApproved?: boolean
+  extractionQuality?: 'verified' | 'minor_mismatch' | 'extraction_error' | 'unverified'
+  reconciliation?: any
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -682,6 +684,43 @@ export default function Statement() {
                    <IconCheck size={16} strokeWidth={3} /> Approve Audit
                  </Button>
                )}
+
+               {isSavedView && data.status === 'COMPLETED' && (
+                 <div className={cn("flex flex-col items-end gap-1 px-4 py-1.5 rounded-xl border border-l-4", 
+                   data.extractionQuality === 'verified' ? "bg-emerald-50 border-emerald-100 border-l-emerald-500" :
+                   data.extractionQuality === 'minor_mismatch' ? "bg-amber-50 border-amber-100 border-l-amber-500" :
+                   data.extractionQuality === 'extraction_error' ? "bg-red-50 border-red-100 border-l-red-500" :
+                   "bg-slate-50 border-slate-100 border-l-slate-400"
+                 )}>
+                    <div className="flex items-center gap-2">
+                      {data.extractionQuality === 'verified' && <IconShieldCheck size={14} className="text-emerald-600" />}
+                      {data.extractionQuality === 'minor_mismatch' && <IconAlertTriangle size={14} className="text-amber-600" />}
+                      {data.extractionQuality === 'extraction_error' && <IconShieldX size={14} className="text-red-600" />}
+                      {data.extractionQuality === 'unverified' && <IconFileOff size={14} className="text-slate-400" />}
+
+                      <span className={cn("text-[10px] font-black uppercase tracking-widest",
+                        data.extractionQuality === 'verified' ? "text-emerald-700" :
+                        data.extractionQuality === 'minor_mismatch' ? "text-amber-700" :
+                        data.extractionQuality === 'extraction_error' ? "text-red-700" :
+                        "text-slate-500"
+                      )}>
+                        {data.extractionQuality === 'verified' ? 'Math Verified' : 
+                         data.extractionQuality === 'minor_mismatch' ? 'Minor Mismatch' : 
+                         data.extractionQuality === 'extraction_error' ? 'Extraction Error' : 'Unverified'}
+                      </span>
+                    </div>
+
+                    {data.reconciliation && data.extractionQuality !== 'unverified' && (
+                      <span className="text-[9px] font-bold text-slate-500 tracking-wider">
+                        {data.reconciliation.balanceDelta === 0 
+                          ? 'Zero Tolerance Δ' 
+                          : `Δ ${fmt(data.reconciliation.balanceDelta, sym)} error`
+                        }
+                      </span>
+                    )}
+                 </div>
+               )}
+
                {data.isApproved && (
                  <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-4 py-2 rounded-xl border border-emerald-100">
                     <IconCheck size={14} strokeWidth={3} />

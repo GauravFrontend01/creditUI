@@ -30,6 +30,11 @@ like a subscription (Netflix, Spotify, insurance, etc).
 Mark isForex: true if the transaction involves a foreign currency or 
 international merchant.
 
+RECONCILIATION SUMMARY QUIRKS:
+1. EMI installments appear as both a credit and a debit — extract both rows separately. Do not deduplicate.
+2. Finance charges often have an internal reference suffix (e.g. FIN CHGS FOR THIS STMT...  - 20001 - 1), do NOT parse that suffix as an amount.
+3. Your provided 'reconciliationSummary' fields must be exactly what is PRINTED on the statement sum section, not what you calculate.
+
 Return ONLY valid JSON in this exact structure:
 {
   "currency": string,
@@ -81,9 +86,60 @@ Return ONLY valid JSON in this exact structure:
     "page": number
   }],
 
-  "reconciliation": string,
+  "reconciliationSummary": {
+    "openingBalance": number,
+    "closingBalance": number,
+    "totalDebits": number,
+    "totalCredits": number,
+    "transactionCount": number
+  },
   "summary": string
 }`;
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+function reconcileStatement(summary, transactions) {
+  if (!summary) summary = {};
+  const { openingBalance = 0, closingBalance = 0, totalDebits = null, totalCredits = null } = summary;
+
+  // Sum extracted transactions by type
+  const extractedDebits = transactions
+    .filter(t => t.type === 'Debit' || t.type === 'debit')
+    .reduce((sum, t) => sum + t.amount, 0);
+
+  const extractedCredits = transactions
+    .filter(t => t.type === 'Credit' || t.type === 'credit')
+    .reduce((sum, t) => sum + t.amount, 0);
+
+  // Core equation: opening + debits - credits = closing
+  const calculatedClosing = round2(openingBalance + extractedDebits - extractedCredits);
+  const balanceDelta = round2(Math.abs(calculatedClosing - closingBalance));
+
+  // Secondary checks (if statement printed these)
+  const debitDelta = totalDebits != null 
+    ? round2(Math.abs(extractedDebits - totalDebits)) 
+    : null;
+
+  const creditDelta = totalCredits != null 
+    ? round2(Math.abs(extractedCredits - totalCredits)) 
+    : null;
+
+  const matched = balanceDelta < 0.02; // 2 paise tolerance for float weirdness
+
+  return {
+    matched,
+    balanceDelta,
+    debitDelta,
+    creditDelta,
+    calculatedClosing,
+    expectedClosing: closingBalance,
+    extractedDebits,
+    extractedCredits,
+    transactionCount: transactions.length
+  };
+}
 
 exports.processStatement = async (statementId, pdfBuffer) => {
   try {
@@ -192,10 +248,32 @@ exports.processStatement = async (statementId, pdfBuffer) => {
         rewardPointsExpiry: extraction.rewardPointsExpiry,
         transactions: extraction.transactions,
         emiList: extraction.emiList,
+        reconciliationSummary: extraction.reconciliationSummary,
         summary: extraction.summary,
-        reconciliation: extraction.reconciliation,
         isApproved: false // User must approve later
     });
+
+    let severity = 'unverified';
+    if (extraction.reconciliationSummary && Array.isArray(extraction.transactions)) {
+      const rec = reconcileStatement(extraction.reconciliationSummary, extraction.transactions);
+      statement.reconciliation = { ...rec, checkedAt: new Date() };
+
+      if (rec.matched) {
+        severity = 'verified';
+      } else {
+        console.warn('[Validation] Reconciliation failed', {
+          statementId,
+          delta: rec.balanceDelta,
+          extractedDebits: rec.extractedDebits,
+          expectedDebits: extraction.reconciliationSummary.totalDebits,
+          txCount: extraction.transactions.length
+        });
+        
+        severity = rec.balanceDelta < 10 ? 'minor_mismatch' : 'extraction_error';
+      }
+    }
+    
+    statement.extractionQuality = severity;
 
     await statement.save();
     console.log(`[Background] Statement ${statementId} processed successfully.`);
