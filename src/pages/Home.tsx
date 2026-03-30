@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react"
+import React, { useState, useRef } from "react"
 import { IconUpload, IconFileTypePdf, IconRocket, IconLoader2, IconSparkles, IconScan, IconDatabase, IconCheck, IconLock, IconSettings, IconDeviceFloppy } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
