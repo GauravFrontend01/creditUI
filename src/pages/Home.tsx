@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/Switch"
 
 import * as pdfjsLib from "pdfjs-dist"
-import { GoogleGenerativeAI } from "@google/generative-ai"
+import { GoogleGenAI } from "@google/genai"
 
 // Set up PDF.js worker using Vite's ?url import for reliable local worker loading
 // @ts-ignore - this is a vite-specific import
@@ -19,7 +19,7 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url"
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
 const API_KEY = import.meta.env.VITE_GOOGLE_API_KEY || ""
-const ai = new GoogleGenerativeAI(API_KEY)
+const ai = new GoogleGenAI({ apiKey: API_KEY })
 
 export default function Home() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -784,7 +784,7 @@ Return ONLY valid JSON in this exact structure:
         if (useGroqHybrid) {
           setCurrentStep(1)
           const textData = await convertPdfToTextWithCoords(selectedFile, pdfPassword)
-          console.log("Extracted Text (Client-Side PDF.js):\\n", textData)
+          console.log("Extracted Text (Client-Side PDF.js):\n", textData)
 
           const sysPrompt = `You are a financial statement parser. Use the spatial data provided (format [x_coord, y_coord] text) to extract the following information. ${promptText}`
           const groqApiKey = import.meta.env.VITE_GROQ_API_KEY
@@ -818,21 +818,16 @@ Return ONLY valid JSON in this exact structure:
           }
         } else {
           setCurrentStep(1)
-          // const model = ai.getGenerativeModel({ model: "gemini-3-flash-preview" })
-          const model = ai.getGenerativeModel({ model: "gemini-2.5-flash" })
-          const result = await model.generateContent([...imagesForAI, { text: promptText }])
-          const responseText = result.response.text()
-
-          try {
-            const jsonMatch = responseText.match(/\{[\s\S]*\}/)
-            if (jsonMatch) {
-              finalResponse = JSON.parse(jsonMatch[0])
-              setLastApiResult(finalResponse)
-            }
-          } catch (e) {
-            console.error("JSON parse failed", responseText)
-            throw new Error("AI returned invalid JSON structure")
-          }
+          const response = await ai.models.generateContent({
+             model: "gemini-3-flash-preview",
+             contents: [...imagesForAI, { text: promptText }],
+             config: {
+                responseMimeType: "application/json"
+             }
+          })
+          
+          finalResponse = JSON.parse(response.text || "{}")
+          setLastApiResult(finalResponse)
         }
       } else {
         setCurrentStep(1)

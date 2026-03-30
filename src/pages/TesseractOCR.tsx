@@ -1,5 +1,6 @@
 import React, { useState, useRef } from "react"
 import { createWorker } from "tesseract.js"
+import { GoogleGenAI } from "@google/genai"
 import * as pdfjsLib from "pdfjs-dist"
 import { IconUpload, IconLoader2, IconFileTypePdf, IconTerminal, IconSparkles, IconDatabase } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
@@ -416,7 +417,7 @@ export default function TesseractOCR() {
           canvasContext: context,
           viewport: viewport
         } as any).promise
-        
+
         canvases.push(canvas)
         setProgress((i / numPages) * 20)
       }
@@ -435,7 +436,7 @@ export default function TesseractOCR() {
       let fullText = ""
       for (let i = 0; i < canvases.length; i++) {
         setStatus(`OCR on page ${i + 1}/${canvases.length}...`)
-        addToLog(`[OCR] Extracting text from Page ${i+1} canvas...`)
+        addToLog(`[OCR] Extracting text from Page ${i + 1} canvas...`)
         const { data: { text } } = await worker.recognize(canvases[i])
         fullText += `\n--- Page ${i + 1} ---\n${text}\n`
       }
@@ -446,7 +447,7 @@ export default function TesseractOCR() {
       console.group("%c EXTRACTION RELEVANT DATA ", "background: #3b82f6; color: #fff; font-weight: bold; padding: 4px 8px; border-radius: 4px;")
       console.log(fullText)
       console.groupEnd()
-      
+
       addToLog("[OCR] Extraction complete. Ready for AI mapping.")
       setStatus("OCR Complete! Check console for full text.")
       setProgress(100)
@@ -480,40 +481,31 @@ export default function TesseractOCR() {
         pdfBase64 = await readFileAsBase64(file)
       }
 
-      const groqApiKey = import.meta.env.VITE_GROQ_API_KEY
-      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${groqApiKey}`
-        },
-        body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: [
-            { role: "system", content: "You are a professional financial data extractor. Map the raw bank statement text provided exactly into the requested JSON schema. Do not skip any transactions. Return ONLY valid JSON." },
-            { role: "user", content: `${PROMPT_TEXT}\n\nEXTRACT DATA FROM THIS TEXT:\n\n${fullExtractedText}` }
-          ],
-          temperature: 0.1,
-          response_format: { type: "json_object" }
-        })
+      const apiKey = import.meta.env.VITE_GOOGLE_API_KEY
+      if (!apiKey) throw new Error("Google AI API key missing.")
+      
+      const ai = new GoogleGenAI({ apiKey })
+      const finalPrompt = `${PROMPT_TEXT}\n\nEXTRACT DATA FROM THIS TEXT:\n\n${fullExtractedText}`
+      
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: finalPrompt,
+        config: {
+          responseMimeType: "application/json"
+        }
       })
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error?.message || "Groq API request failed.")
-      }
+      const responseText = response.text || ""
+      if (!responseText) throw new Error("AI returned an empty response.")
+      const finalResponse = JSON.parse(responseText)
 
-      const data = await response.json()
-      const responseText = data.choices[0].message.content
-      const finalResponse = typeof responseText === 'string' ? JSON.parse(responseText) : responseText
-      
       // Save everything required for the result page (/statement)
       sessionStorage.setItem("extraction_result", JSON.stringify(finalResponse))
       sessionStorage.setItem("pdf_raw_name", file?.name || "OCR_Extraction.pdf")
       if (pdfBase64) {
         sessionStorage.setItem("pdf_base64", pdfBase64)
       }
-      
+
       addToLog("[AI] Data mapping successful! Redirecting to Audit Dashboard...")
       setTimeout(() => navigate("/statement"), 800)
 
@@ -529,11 +521,11 @@ export default function TesseractOCR() {
     <div className="flex flex-col items-center justify-center min-h-[calc(100vh-10rem)] p-6 gap-8">
       <Card className="w-full max-w-2xl border-none shadow-2xl bg-white/5 backdrop-blur-xl border border-white/10 overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-blue-500/10 via-transparent to-indigo-500/10 pointer-events-none" />
-        
+
         <CardHeader className="text-center relative">
           <div className="flex justify-center gap-2 mb-4">
-             <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">Frontend OCR</Badge>
-             <Badge onClick={loadDummyData} className="bg-amber-500/20 text-amber-400 border-amber-500/30 cursor-pointer hover:bg-amber-500/30">Load Dummy</Badge>
+            <Badge className="bg-blue-500/20 text-blue-400 border-blue-500/30">Frontend OCR</Badge>
+            <Badge onClick={loadDummyData} className="bg-amber-500/20 text-amber-400 border-amber-500/30 cursor-pointer hover:bg-amber-500/30">Load Dummy</Badge>
           </div>
           <CardTitle className="text-4xl font-black bg-gradient-to-r from-blue-400 via-indigo-400 to-emerald-400 bg-clip-text text-transparent">
             Tesseract OCR
@@ -545,7 +537,7 @@ export default function TesseractOCR() {
 
         <CardContent className="space-y-8 relative">
           {!fullExtractedText ? (
-            <div 
+            <div
               onClick={() => !isProcessing && fileInputRef.current?.click()}
               className={cn(
                 "group relative flex flex-col items-center justify-center border-2 border-dashed rounded-3xl p-16 transition-all duration-500",
@@ -580,8 +572,8 @@ export default function TesseractOCR() {
                 <p className="text-xl font-bold text-white">OCR Extraction Ready</p>
                 <p className="text-sm text-slate-400">{fullExtractedText.length} characters captured</p>
               </div>
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 onClick={() => setFullExtractedText("")}
                 className="h-8 text-[10px] uppercase font-bold border-white/10 hover:bg-white/5"
               >
@@ -608,7 +600,7 @@ export default function TesseractOCR() {
             )}
 
             {!fullExtractedText ? (
-              <Button 
+              <Button
                 onClick={performOCR}
                 disabled={!file || isProcessing}
                 className={cn(
@@ -624,7 +616,7 @@ export default function TesseractOCR() {
                 ) : "Run OCR Extraction"}
               </Button>
             ) : (
-              <Button 
+              <Button
                 onClick={handleAnalyzeWithAI}
                 disabled={isAnalyzing}
                 className="w-full h-16 text-xl font-black bg-gradient-to-r from-emerald-500 via-teal-500 to-blue-500 hover:scale-[1.02] active:scale-95 transition-all shadow-2xl shadow-emerald-500/20 gap-3 border-none text-white rounded-2xl"
@@ -655,9 +647,9 @@ export default function TesseractOCR() {
               {logContent.map((log, i) => (
                 <p key={i} className={cn(
                   "text-xs",
-                  log.includes("[Error]") ? "text-red-400" : 
-                  log.includes("[AI]") ? "text-emerald-400" :
-                  log.includes("[OCR]") ? "text-blue-400" : "text-slate-500"
+                  log.includes("[Error]") ? "text-red-400" :
+                    log.includes("[AI]") ? "text-emerald-400" :
+                      log.includes("[OCR]") ? "text-blue-400" : "text-slate-500"
                 )}>
                   {log}
                 </p>
