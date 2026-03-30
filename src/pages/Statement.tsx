@@ -291,6 +291,7 @@ export default function Statement() {
   const [tab, setTab] = useState<'transactions' | 'emi' | 'overview'>('transactions')
   const [txSorting, setTxSorting] = useState<SortingState>([])
   const [txGlobalFilter, setTxGlobalFilter] = useState("")
+  const [activeFooterFilter, setActiveFooterFilter] = useState<'debit' | 'credit' | 'fees' | null>(null)
 
   const { id } = useParams()
   const navigate = useNavigate()
@@ -426,11 +427,26 @@ export default function Statement() {
     state: { sorting: txSorting, globalFilter: txGlobalFilter },
     onSortingChange: setTxSorting,
     onGlobalFilterChange: setTxGlobalFilter,
+    globalFilterFn: (row, _colId, filterValue: string) => {
+      if (filterValue === '__DEBIT__') return row.original.type === 'Debit'
+      if (filterValue === '__CREDIT__') return row.original.type === 'Credit'
+      if (filterValue === '__FEES__') return row.original.category === 'Fee'
+      // Normal text search
+      const q = filterValue.toLowerCase()
+      const tx = row.original
+      return (
+        tx.description?.toLowerCase().includes(q) ||
+        tx.merchantName?.toLowerCase().includes(q) ||
+        tx.category?.toLowerCase().includes(q) ||
+        tx.date?.toLowerCase().includes(q) ||
+        String(tx.amount).includes(q)
+      )
+    },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: 15 } },
+    initialState: { pagination: { pageSize: 100 } },
   })
 
   if (!data) return null
@@ -440,6 +456,11 @@ export default function Statement() {
   const emis = data.emiList || []
   const utilPct = data.creditLimit?.val
     ? Math.round(((data.outstandingTotal?.val ?? 0) / data.creditLimit.val) * 100) : 0
+
+  // Compute totals directly from transactions — always matches what user sees
+  const txTotalDebits  = txs.filter(t => t.type === 'Debit').reduce((s, t) => s + t.amount, 0)
+  const txTotalCredits = txs.filter(t => t.type === 'Credit').reduce((s, t) => s + t.amount, 0)
+  const txTotalFees    = txs.filter(t => t.category === 'Fee' && t.type === 'Debit').reduce((s, t) => s + t.amount, 0)
 
 
   return (
@@ -631,26 +652,95 @@ export default function Statement() {
               </Table>
             </div>
 
-            {/* Footer: totals + pagination */}
-            <div className="shrink-0 px-6 py-3 bg-white border-t flex items-center justify-between gap-4">
-              <div className="flex items-center gap-6">
-                <MetricCard label="Total Debits" value={fmt(data.totalDebits?.val, sym)} color="text-red-600" small />
-                <MetricCard label="Total Credits" value={fmt(data.totalCredits?.val, sym)} color="text-emerald-600" small />
-                {(data.totalFees?.val ?? 0) > 0 && (
-                  <MetricCard label="Fees & Interest" value={fmt((data.totalFees?.val ?? 0) + (data.totalInterestCharged?.val ?? 0), sym)} color="text-slate-500" small />
-                )}
-              </div>
-              <div className="flex items-center gap-3">
-                {table.getPageCount() > 1 && (
-                  <div className="flex items-center gap-1.5">
-                    <button onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()} className="h-7 w-7 rounded border text-xs disabled:opacity-30 hover:bg-slate-50 flex items-center justify-center">‹</button>
-                    <span className="text-[10px] font-bold text-slate-400">{table.getState().pagination.pageIndex + 1}/{table.getPageCount()}</span>
-                    <button onClick={() => table.nextPage()} disabled={!table.getCanNextPage()} className="h-7 w-7 rounded border text-xs disabled:opacity-30 hover:bg-slate-50 flex items-center justify-center">›</button>
-                  </div>
-                )}
-                {!isSavedView && (
-                  <ApproveButton onApprove={handleApprove} />
-                )}
+            {/* Footer: totals as clickable filter chips */}
+            <div className="shrink-0 px-6 py-3 bg-white border-t">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2">
+
+                  {/* Debit chip */}
+                  <button
+                    onClick={() => {
+                      if (activeFooterFilter === 'debit') { setActiveFooterFilter(null); setTxGlobalFilter("") }
+                      else { setActiveFooterFilter('debit'); setTxGlobalFilter("__DEBIT__") }
+                    }}
+                    className={cn(
+                      'flex flex-col items-start px-3 py-2 rounded-xl border transition-all text-left group',
+                      activeFooterFilter === 'debit'
+                        ? 'border-red-300 bg-red-50 ring-1 ring-red-200'
+                        : 'border-slate-100 hover:border-red-200 hover:bg-red-50/40'
+                    )}
+                    title="Click to see only debit transactions"
+                  >
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                      Total Debits
+                      {activeFooterFilter === 'debit'
+                        ? <span className="text-red-400">· click to clear ✕</span>
+                        : <span className="text-slate-300 group-hover:text-red-300">· click to drill down</span>}
+                    </span>
+                    <span className="font-bold text-sm text-red-600 tabular-nums">{fmt(txTotalDebits, sym)}</span>
+                  </button>
+
+                  {/* Credit chip */}
+                  <button
+                    onClick={() => {
+                      if (activeFooterFilter === 'credit') { setActiveFooterFilter(null); setTxGlobalFilter("") }
+                      else { setActiveFooterFilter('credit'); setTxGlobalFilter("__CREDIT__") }
+                    }}
+                    className={cn(
+                      'flex flex-col items-start px-3 py-2 rounded-xl border transition-all text-left group',
+                      activeFooterFilter === 'credit'
+                        ? 'border-emerald-300 bg-emerald-50 ring-1 ring-emerald-200'
+                        : 'border-slate-100 hover:border-emerald-200 hover:bg-emerald-50/40'
+                    )}
+                    title="Click to see only credit transactions"
+                  >
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                      Total Credits
+                      {activeFooterFilter === 'credit'
+                        ? <span className="text-emerald-500">· click to clear ✕</span>
+                        : <span className="text-slate-300 group-hover:text-emerald-300">· click to drill down</span>}
+                    </span>
+                    <span className="font-bold text-sm text-emerald-600 tabular-nums">{fmt(txTotalCredits, sym)}</span>
+                  </button>
+
+                  {/* Fees chip */}
+                  {txTotalFees > 0 && (
+                    <button
+                      onClick={() => {
+                        if (activeFooterFilter === 'fees') { setActiveFooterFilter(null); setTxGlobalFilter("") }
+                        else { setActiveFooterFilter('fees'); setTxGlobalFilter("__FEES__") }
+                      }}
+                      className={cn(
+                        'flex flex-col items-start px-3 py-2 rounded-xl border transition-all text-left group',
+                        activeFooterFilter === 'fees'
+                          ? 'border-orange-300 bg-orange-50 ring-1 ring-orange-200'
+                          : 'border-slate-100 hover:border-orange-200 hover:bg-orange-50/40'
+                      )}
+                      title="Click to see fees & interest transactions"
+                    >
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                        Fees & Interest
+                        {activeFooterFilter === 'fees'
+                          ? <span className="text-orange-400">· click to clear ✕</span>
+                          : <span className="text-slate-300 group-hover:text-orange-300">· click to drill down</span>}
+                      </span>
+                      <span className="font-bold text-sm text-orange-600 tabular-nums">{fmt(txTotalFees, sym)}</span>
+                    </button>
+                  )}
+
+                  {/* Row count when filtered */}
+                  {activeFooterFilter && (
+                    <span className="text-[10px] font-bold text-slate-400 ml-2 self-center">
+                      ↑ {table.getFilteredRowModel().rows.length} transactions shown
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {!isSavedView && (
+                    <ApproveButton onApprove={handleApprove} />
+                  )}
+                </div>
               </div>
             </div>
           </div>
