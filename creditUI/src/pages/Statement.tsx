@@ -1079,10 +1079,9 @@ export default function Statement() {
       )}
       {/* Math Transparency Modal */}
       {showMathDetails && data?.reconciliation && (
-        <div className="fixed inset-0 z-[2000] flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-200">
-          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setShowMathDetails(false)} />
-          <div className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-slate-100">
-            <div className="px-8 py-6 border-b border-slate-100 flex items-center justify-between">
+        <div className="fixed top-24 right-12 z-[2000] flex animate-in fade-in slide-in-from-right-8 duration-300 w-full max-w-[34rem]">
+          <div className="relative w-full bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-slate-200">
+            <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
                <div className="flex items-center gap-3">
                  <div className={cn("p-2 rounded-xl", 
                    data.extractionQuality === 'verified' ? "bg-emerald-100 text-emerald-600" :
@@ -1092,8 +1091,8 @@ export default function Statement() {
                    <IconMath size={20} strokeWidth={2.5} />
                  </div>
                  <div>
-                   <h3 className="text-xl font-black text-slate-800 tracking-tight">Mathematical Proof</h3>
-                   <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Automated Reconciliation Engine</p>
+                   <h3 className="text-base font-black text-slate-800 tracking-tight">Mathematical Proof</h3>
+                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Reconciliation Engine</p>
                  </div>
                </div>
                <button onClick={() => setShowMathDetails(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors">
@@ -1101,34 +1100,64 @@ export default function Statement() {
                </button>
             </div>
 
-            <div className="p-8 space-y-8 bg-slate-50/50">
-               {/* Equation Grid */}
-               <div className="grid grid-cols-5 items-center gap-4 text-center">
-                 <div className="flex flex-col gap-2">
-                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Opening<br/>Balance</span>
-                   <span className="text-base font-black tabular-nums">{fmt(data.reconciliationSummary?.openingBalance || 0, sym)}</span>
+            <div className="p-6 space-y-6">
+               <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-4 text-center relative z-10">
+                 <div 
+                   className="flex flex-col gap-1.5 cursor-pointer hover:bg-slate-100 p-2 rounded-xl border border-transparent hover:border-slate-200 transition-all active:scale-95 group"
+                   onClick={() => {
+                     if (data.previousBalance?.box?.length && data.previousBalance.page) {
+                       setActiveBox({ box: data.previousBalance.box, page: data.previousBalance.page, id: 'previousBalance' })
+                       document.getElementById(`pdf-page-${data.previousBalance.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                     } else {
+                       setToast({ message: "Bounding box not identified for Opening Balance", visible: true, type: 'error' });
+                       setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+                     }
+                   }}
+                 >
+                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-100 py-0.5 rounded text-[8px] group-hover:bg-slate-200">Printed</span>
+                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Opening<br/>Balance</span>
+                   <span className="text-sm font-black tabular-nums">{fmt(data.reconciliationSummary?.openingBalance || 0, sym)}</span>
                  </div>
-                 <div className="flex items-center justify-center text-slate-300"><IconPlus size={20} /></div>
-                 <div className="flex flex-col gap-2">
-                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Extracted<br/>Debits</span>
-                   <span className="text-base font-black tabular-nums text-red-600">{fmt(data.reconciliation.extractedDebits || 0, sym)}</span>
+                 
+                 <div className="flex items-center justify-center text-slate-300"><IconPlus size={16} /></div>
+                 
+                 <div className="flex flex-col gap-1.5 p-2 border border-dashed border-red-200 rounded-xl bg-red-50/50">
+                   <span className="text-[10px] font-bold text-red-400 uppercase tracking-widest bg-red-100/50 py-0.5 rounded text-[8px]">Calculated</span>
+                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Extracted<br/>Debits</span>
+                   <span className="text-sm font-black tabular-nums text-red-600">{fmt(data.reconciliation.extractedDebits || 0, sym)}</span>
                  </div>
-                 <div className="flex items-center justify-center text-slate-300"><IconMinus size={20} /></div>
-                 <div className="flex flex-col gap-2">
-                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-tight">Extracted<br/>Credits</span>
-                   <span className="text-base font-black tabular-nums text-emerald-600">{fmt(data.reconciliation.extractedCredits || 0, sym)}</span>
+                 
+                 <div className="flex items-center justify-center text-slate-300"><IconMinus size={16} /></div>
+                 
+                 <div className="flex flex-col gap-1.5 p-2 border border-dashed border-emerald-200 rounded-xl bg-emerald-50/50">
+                   <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest bg-emerald-100/50 py-0.5 rounded text-[8px]">Calculated</span>
+                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Extracted<br/>Credits</span>
+                   <span className="text-sm font-black tabular-nums text-emerald-600">{fmt(data.reconciliation.extractedCredits || 0, sym)}</span>
                  </div>
                </div>
 
-               <div className="rounded-2xl bg-white border border-slate-200 p-6 flex items-center justify-between shadow-sm">
-                 <div className="flex flex-col gap-1 w-1/3">
-                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Calculated Net</span>
-                   <span className="text-2xl font-black tabular-nums text-slate-800">{fmt(data.reconciliation.calculatedClosing || 0, sym)}</span>
+               <div className="bg-slate-50 rounded-2xl border border-slate-200 p-5 flex items-center justify-between shadow-inner">
+                 <div className="flex flex-col gap-1">
+                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0">Calculated Net</span>
+                   <span className="text-xl font-black tabular-nums text-slate-800">{fmt(data.reconciliation.calculatedClosing || 0, sym)}</span>
                  </div>
-                 <div className="w-1/3 flex justify-center text-slate-300"><IconEqual size={32} /></div>
-                 <div className="flex flex-col gap-1 w-1/3 text-right">
-                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Statement Match</span>
-                   <span className={cn("text-2xl font-black tabular-nums",
+                 
+                 <div className="flex justify-center text-slate-300 shrink-0"><IconEqual size={24} /></div>
+                 
+                 <div 
+                   className="flex flex-col gap-1 text-right cursor-pointer hover:bg-slate-200/50 p-2 -my-2 -mr-2 rounded-xl transition-all active:scale-95"
+                   onClick={() => {
+                     if (data.outstandingTotal?.box?.length && data.outstandingTotal.page) {
+                       setActiveBox({ box: data.outstandingTotal.box, page: data.outstandingTotal.page, id: 'outstandingTotal' })
+                       document.getElementById(`pdf-page-${data.outstandingTotal.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                     } else {
+                       setToast({ message: "Bounding box not identified for Closing Balance", visible: true, type: 'error' });
+                       setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+                     }
+                   }}
+                 >
+                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0 bg-slate-200/50 px-2 py-0.5 rounded inline-flex self-end items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" /> Printed PDF Box</span>
+                   <span className={cn("text-xl font-black tabular-nums",
                       data.reconciliation.balanceDelta === 0 ? "text-emerald-500" :
                       data.reconciliation.balanceDelta < 10 ? "text-amber-500" : "text-red-500"
                    )}>
@@ -1137,22 +1166,20 @@ export default function Statement() {
                  </div>
                </div>
 
-               {/* Delta Banner */}
-               <div className={cn("px-6 py-4 rounded-xl flex items-center justify-between border",
+               <div className={cn("px-5 py-3 rounded-xl flex items-center justify-between border",
                  data.reconciliation.balanceDelta === 0 ? "bg-emerald-50 border-emerald-100" :
                  data.reconciliation.balanceDelta < 10 ? "bg-amber-50 border-amber-100" : "bg-red-50 border-red-100"
                )}>
-                 <span className={cn("text-sm font-bold", 
+                 <span className={cn("text-xs font-bold", 
                    data.reconciliation.balanceDelta === 0 ? "text-emerald-800" :
                    data.reconciliation.balanceDelta < 10 ? "text-amber-800" : "text-red-800"
                  )}>
                    {data.reconciliation.balanceDelta === 0 ? "Extraction mathematically flawless." : `Discrepancy of ${fmt(data.reconciliation.balanceDelta, sym)} detected.`}
                  </span>
-                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-white/50 px-3 py-1.5 rounded-lg">
-                   Found {data.reconciliation.transactionCount} entries
+                 <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest bg-white/50 px-2 py-1 rounded-lg">
+                   {data.reconciliation.transactionCount} Extracted
                  </span>
                </div>
-
             </div>
           </div>
         </div>
