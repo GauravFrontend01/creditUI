@@ -14,7 +14,7 @@ lerna-debug.log*
 .idea
 *.suo
 *.ntvs*
-*.njsproj
+*.njsprojk
 *.sln
 *.sw?
 

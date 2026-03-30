@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import axios from 'axios';
 
 interface User {
   _id: string;
@@ -54,13 +53,4 @@ export const useAuth = () => {
   return context;
 };
 
-// No explicit baseURL needed with Vite proxy setup for /api
-// Add interceptor to include token in headers
-axios.interceptors.request.use((config) => {
-  const userInfo = localStorage.getItem('userInfo');
-  if (userInfo) {
-    const { token } = JSON.parse(userInfo);
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
+// Interceptor logic was moved to @/lib/api.ts for cleaner environment-aware routing.

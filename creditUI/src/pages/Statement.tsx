@@ -1,17 +1,17 @@
 import React, { useState, useEffect, useRef } from "react"
 import { useNavigate, useParams } from "react-router-dom"
+import api from "@/lib/api"
 import { cn } from "@/lib/utils"
 import {
   IconDownload, IconArrowLeft, IconFileOff, IconLoader2,
   IconReceipt2, IconChartBar, IconCreditCard, IconCalendar,
   IconTrendingDown, IconTrendingUp, IconGift,
-  IconArrowUp, IconArrowDown, IconArrowsUpDown, IconAlertTriangle,
+  IconArrowUp, IconArrowDown, IconArrowsUpDown, IconAlertTriangle, IconCheck
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
-import axios from "axios"
 
 import {
   flexRender, getCoreRowModel, getSortedRowModel,
@@ -76,6 +76,8 @@ interface StatementData {
   summary?: string
   pdfStorageUrl?: string
   pdfPassword?: string
+  status?: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED"
+  isApproved?: boolean
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -311,6 +313,7 @@ export default function Statement() {
   const [txSorting, setTxSorting] = useState<SortingState>([])
   const [txGlobalFilter, setTxGlobalFilter] = useState("")
   const [activeFooterFilter, setActiveFooterFilter] = useState<'debit' | 'credit' | 'fees' | null>(null)
+  const [toast, setToast] = useState<{message: string, visible: boolean, type: 'success' | 'error'}>({ message: "", visible: false, type: 'success' })
 
   const { id } = useParams()
   const navigate = useNavigate()
@@ -324,10 +327,13 @@ export default function Statement() {
       if (id) {
         setIsSavedView(true)
         try {
-          const res = await axios.get(`/api/statements/${id}`)
-          setData(res.data)
-          if (res.data.pdfStorageUrl) loadPdfFromUrl(res.data.pdfStorageUrl, res.data.pdfPassword)
-        } catch { navigate('/statements') }
+          const { data } = await api.get(`/api/statements/${id}`)
+          setData(data)
+          if (data.pdfStorageUrl) loadPdfFromUrl(data.pdfStorageUrl, data.pdfPassword)
+        } catch (e: any) {
+          if (e.response?.status === 401) navigate('/login')
+          else navigate('/statements')
+        }
       } else {
         const raw = sessionStorage.getItem('extraction_result')
         const b64 = sessionStorage.getItem('pdf_base64')
@@ -409,24 +415,16 @@ export default function Statement() {
   }, [activeBox, loadingPdf, pages])
 
   // ── Save handler ──────────────────────────────────────────────────────────
-  const handleApprove = async () => {
+  const confirmApproval = async () => {
+    if (!id) return
     try {
-      const b64 = sessionStorage.getItem('pdf_base64')
-      const pass = sessionStorage.getItem('pdf_password') || ''
-      const name = sessionStorage.getItem('pdf_raw_name') || 'statement.pdf'
-      if (!b64) throw new Error('PDF not in session')
-      const raw = atob(b64.split(',')[1])
-      const bytes = new Uint8Array(raw.length)
-      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i)
-      const file = new File([bytes], name, { type: 'application/pdf' })
-      const form = new FormData()
-      form.append('pdf', file)
-      form.append('data', JSON.stringify(data))
-      form.append('pdfPassword', pass)
-      await axios.post('/api/statements', form, { headers: { 'Content-Type': 'multipart/form-data' } })
-      navigate('/statements')
+      await api.put(`/api/statements/${id}/approve`)
+      setData(prev => prev ? { ...prev, isApproved: true } : null)
+      setToast({ message: 'Forensic Audit Approved', visible: true, type: 'success' })
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000)
     } catch (e: any) {
-      alert('Save failed: ' + e.message)
+      setToast({ message: 'Approval failed: ' + (e.message || "Unknown error"), visible: true, type: 'error' })
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000)
     }
   }
 
@@ -453,11 +451,9 @@ export default function Statement() {
 
     try {
       if (tx.merchantName) {
-        await axios.post('/api/vendor-rules', {
+        await api.post('/api/vendor-rules', {
           merchantName: tx.merchantName,
           category: newCat
-        }, {
-           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
         });
       }
     } catch (e) {
@@ -495,7 +491,72 @@ export default function Statement() {
     initialState: { pagination: { pageSize: 100 } },
   })
 
+  // ── Keyboard Navigation for Transactions Table ──────────────
+  useEffect(() => {
+    if (tab !== 'transactions') return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Allow default behavior if they are typing in an input
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'SELECT') {
+        return;
+      }
+
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+
+      const rows = table.getRowModel().rows;
+      if (!rows.length) return;
+
+      e.preventDefault();
+
+      let nextIndex = 0;
+      if (activeBox) {
+        const currentIndex = rows.findIndex(r => (r.original._id || r.original.description) === activeBox.id);
+        
+        if (currentIndex !== -1) {
+          if (e.key === 'ArrowDown') {
+            nextIndex = currentIndex < rows.length - 1 ? currentIndex + 1 : 0;
+          } else if (e.key === 'ArrowUp') {
+            nextIndex = currentIndex > 0 ? currentIndex - 1 : rows.length - 1;
+          }
+        }
+      }
+
+      const nextTx = rows[nextIndex].original;
+      if (nextTx.box?.length && nextTx.page) {
+        setActiveBox({ box: nextTx.box, page: nextTx.page, id: nextTx._id || nextTx.description });
+        
+        document.getElementById(`pdf-page-${nextTx.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        
+        // Let React render the new active state before scrolling the table
+        setTimeout(() => {
+          document.getElementById(`tx-row-${nextTx._id || nextTx.description}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 50);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [tab, activeBox, table]);
+
   if (!data) return null
+
+  if (data.status === 'PENDING' || data.status === 'PROCESSING') {
+    return (
+      <div className="flex flex-col items-center justify-center w-full h-screen bg-slate-50 gap-6">
+        <div className="relative">
+          <div className="absolute inset-0 bg-primary/20 rounded-full blur-2xl animate-pulse" />
+          <IconLoader2 className="h-16 w-16 animate-spin text-primary relative z-10" />
+        </div>
+        <div className="text-center space-y-2 relative z-10">
+          <h2 className="text-2xl font-black tracking-tight text-slate-800 uppercase">Neural Audit in Progress</h2>
+          <p className="text-sm text-slate-400 font-bold uppercase tracking-[0.2em]">Mapping spatial vectors & categorizing portfolio risks...</p>
+        </div>
+        <Button variant="outline" className="rounded-xl px-8 h-12 gap-2 mt-4" onClick={() => navigate('/statements')}>
+           <IconArrowLeft size={16} /> Return to Queue
+        </Button>
+      </div>
+    )
+  }
 
   const sym = getCurrencySymbol(data.currency)
   const txs = data.transactions || []
@@ -611,9 +672,22 @@ export default function Statement() {
                 sub={`${utilPct}% utilized`}
               />
               <MetricCard label="Min Due" value={fmt(data.minPaymentDue?.val, sym)} color="text-amber-600" sub={data.paymentDueDate?.val} />
-              {data.rewardPointsBalance?.val != null && (
-                <MetricCard label="Reward Points" value={`${data.rewardPointsBalance.val.toLocaleString()} pts`} color="text-violet-600" />
-              )}
+            </div>
+            <div className="flex items-center gap-4">
+               {isSavedView && !data.isApproved && data.status === 'COMPLETED' && (
+                 <Button 
+                   onClick={confirmApproval}
+                   className="rounded-xl px-6 h-11 gap-2 bg-emerald-600 hover:bg-emerald-700 shadow-[0_8px_16px_-6px_rgba(16,185,129,0.3)] font-bold text-xs uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98]"
+                 >
+                   <IconCheck size={16} strokeWidth={3} /> Approve Audit
+                 </Button>
+               )}
+               {data.isApproved && (
+                 <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-4 py-2 rounded-xl border border-emerald-100">
+                    <IconCheck size={14} strokeWidth={3} />
+                    <span className="text-[10px] font-black uppercase tracking-widest">Verified Report</span>
+                 </div>
+               )}
             </div>
           </div>
 
@@ -784,7 +858,12 @@ export default function Statement() {
 
                 <div className="flex items-center gap-3">
                   {!isSavedView && (
-                    <ApproveButton onApprove={handleApprove} />
+                    <Button 
+                      onClick={() => navigate('/statements')}
+                      className="rounded-xl h-10 px-6 font-bold text-xs bg-primary"
+                    >
+                      Audit Queued - View All
+                    </Button>
                   )}
                 </div>
               </div>
@@ -929,26 +1008,32 @@ export default function Statement() {
             {/* Approve button if fresh */}
             {!isSavedView && (
               <div className="flex justify-end pt-2">
-                <ApproveButton onApprove={handleApprove} />
+                <Button onClick={() => navigate('/statements')} className="rounded-xl h-12 px-8 font-bold bg-primary shadow-lg transition-transform active:scale-95">
+                  View All Audits
+                </Button>
               </div>
             )}
           </div>
         )}
       </div>
-    </div>
-  )
-}
 
-function ApproveButton({ onApprove }: { onApprove: () => Promise<void> }) {
-  const [loading, setLoading] = React.useState(false)
-  const handle = async () => { setLoading(true); await onApprove(); setLoading(false) }
-  return (
-    <Button
-      onClick={handle}
-      disabled={loading}
-      className="h-9 px-6 font-bold text-xs uppercase tracking-wide rounded-lg shadow-sm"
-    >
-      {loading ? <><IconLoader2 size={14} className="animate-spin mr-2" />Saving...</> : 'Approve & Save'}
-    </Button>
+      {/* Global Toast */}
+      {toast.visible && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[1000] animate-in slide-in-from-bottom-4 duration-300">
+          <div className={cn(
+            "text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border backdrop-blur-md",
+            toast.type === 'success' ? "bg-slate-900 border-white/10" : "bg-red-600 border-red-400/20"
+          )}>
+            <div className={cn(
+              "h-6 w-6 rounded-full flex items-center justify-center",
+              toast.type === 'success' ? "bg-emerald-500" : "bg-white/20"
+            )}>
+              {toast.type === 'success' ? <IconCheck size={14} strokeWidth={3} /> : <IconAlertTriangle size={14} />}
+            </div>
+            <span className="text-sm font-bold tracking-tight">{toast.message}</span>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

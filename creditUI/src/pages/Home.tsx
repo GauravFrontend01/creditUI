@@ -31,6 +31,7 @@ export default function Home() {
   const [useLiveApi, setUseLiveApi] = useState(false)
   const [useGroqHybrid, setUseGroqHybrid] = useState(false)
   const [lastApiResult, setLastApiResult] = useState<any>(null)
+  const [toast, setToast] = useState<{message: string, visible: boolean}>({ message: "", visible: false })
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
@@ -859,7 +860,8 @@ Return ONLY valid JSON in this exact structure:
   const saveAsDummy = () => {
     if (lastApiResult) {
       localStorage.setItem("custom_dummy_data", JSON.stringify(lastApiResult))
-      alert("Current API response saved as new dummy data!")
+      setToast({ message: "Current API response saved as new dummy data!", visible: true })
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000)
     }
   }
 
@@ -1059,6 +1061,18 @@ Return ONLY valid JSON in this exact structure:
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Global Toast Replacement */}
+      {toast.visible && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] animate-in slide-in-from-bottom-4 duration-300">
+          <div className="bg-slate-900 text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/10 backdrop-blur-md">
+            <div className="h-6 w-6 rounded-full bg-emerald-500 flex items-center justify-center">
+              <IconCheck size={14} strokeWidth={3} />
+            </div>
+            <span className="text-sm font-bold tracking-tight">{toast.message}</span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

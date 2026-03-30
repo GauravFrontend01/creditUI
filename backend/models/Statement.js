@@ -83,6 +83,15 @@ const statementSchema = new mongoose.Schema({
   pdfFileName:   String,
   pdfPassword:   { type: String, default: '' },
 
+  // ── Status & Processing ────────────────────────────────────────────────────
+  status: {
+    type: String,
+    enum: ['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'],
+    default: 'PENDING'
+  },
+  processingError: String,
+  isApproved: { type: Boolean, default: false },
+
   createdAt: { type: Date, default: Date.now },
 });
 

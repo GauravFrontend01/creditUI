@@ -1,7 +1,7 @@
 import { useState } from "react"
 import { useNavigate, Link } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
-import axios from "axios"
+import api from "@/lib/api"
 import { IconLock, IconMail, IconLoader2 } from "@tabler/icons-react"
 
 export default function Login() {
@@ -18,7 +18,7 @@ export default function Login() {
     setError("")
 
     try {
-      const response = await axios.post("/api/users/login", { email, password })
+      const response = await api.post("/api/users/login", { email, password })
       login(response.data)
       navigate("/")
     } catch (err: any) {

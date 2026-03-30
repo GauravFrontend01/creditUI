@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useNavigate } from "react-router-dom"
-import axios from "axios"
+import api from "@/lib/api"
 import {
   flexRender,
   getCoreRowModel,
@@ -29,6 +29,7 @@ import {
   IconReceipt2,
   IconTrendingUp,
   IconAlertCircle,
+  IconCheck,
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -52,6 +53,8 @@ interface Statement {
   minPaymentDue?: { val: number }
   transactions?: { _id: string; amount: number; type: string }[]
   currency?: string
+  status?: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED"
+  isApproved?: boolean
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -106,6 +109,48 @@ const columns: ColumnDef<Statement>[] = [
         </div>
       </div>
     ),
+  },
+  {
+    id: "auditStatus",
+    header: ({ column }) => <SortHeader column={column} label="Audit Status" />,
+    cell: ({ row }) => {
+      const status = row.original.status || "COMPLETED"
+      const isApproved = row.original.isApproved
+
+      if (status === "PENDING" || status === "PROCESSING") {
+        return (
+          <div className="flex items-center gap-2 text-amber-600 bg-amber-100/50 px-3 py-1 rounded-full w-fit border border-amber-200">
+            <IconLoader2 size={12} className="animate-spin text-amber-600" />
+            <span className="text-[9px] font-black uppercase tracking-wider">Brain Processing</span>
+          </div>
+        )
+      }
+
+      if (status === "FAILED") {
+        return (
+          <div className="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-1 rounded-full w-fit border border-red-100">
+            <IconAlertCircle size={12} />
+            <span className="text-[9px] font-black uppercase tracking-wider">Failed</span>
+          </div>
+        )
+      }
+
+      if (!isApproved) {
+        return (
+          <div className="flex items-center gap-2 text-blue-600 bg-blue-50 px-3 py-1 rounded-full w-fit border border-blue-100">
+            <IconAlertCircle size={12} className="opacity-70" />
+            <span className="text-[9px] font-black uppercase tracking-wider">Draft Review</span>
+          </div>
+        )
+      }
+
+      return (
+        <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full w-fit border border-emerald-100">
+          <IconCheck size={12} strokeWidth={3} />
+          <span className="text-[9px] font-black uppercase tracking-wider">Verified Audit</span>
+        </div>
+      )
+    },
   },
   {
     accessorKey: "creditLimit.val",
@@ -215,35 +260,18 @@ const columns: ColumnDef<Statement>[] = [
 
 // ── Delete Button ──────────────────────────────────────────────────────────
 function DeleteButton({ statementId, bankName }: { statementId: string; bankName: string }) {
-  const [deleting, setDeleting] = React.useState(false)
-
-  const handleDelete = async () => {
-    if (!window.confirm(`Delete "${bankName}"? This will also remove the PDF from storage.`)) return
-    setDeleting(true)
-    try {
-      await axios.delete(`/api/statements/${statementId}`)
-      // Dispatch a custom event so the page re-fetches
-      window.dispatchEvent(new CustomEvent('statement-deleted', { detail: statementId }))
-    } catch (err) {
-      console.error('Delete failed', err)
-      alert('Failed to delete. Please try again.')
-    } finally {
-      setDeleting(false)
-    }
-  }
-
   return (
     <Button
       size="sm"
       variant="ghost"
-      disabled={deleting}
-      onClick={handleDelete}
+      onClick={(e) => {
+        e.stopPropagation();
+        window.dispatchEvent(new CustomEvent('request-delete', { detail: { id: statementId, name: bankName } }));
+      }}
       className="h-8 gap-1.5 text-xs font-bold text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg px-3 transition-colors"
     >
-      {deleting
-        ? <IconLoader2 size={14} className="animate-spin" />
-        : <IconTrash size={14} />}
-      {deleting ? 'Deleting...' : 'Delete'}
+      <IconTrash size={14} />
+      Delete
     </Button>
   )
 }
@@ -286,21 +314,39 @@ export default function StatementsList() {
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({})
   const [globalFilter, setGlobalFilter] = React.useState("")
+  const [deleteDialog, setDeleteDialog] = React.useState<{id: string, name: string} | null>(null)
   const navigate = useNavigate()
 
   React.useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+
     const fetch_ = async () => {
       try {
-        const res = await axios.get("/api/statements")
-        setStatements(res.data)
+        const res = await api.get("/api/statements");
+        setStatements(res.data);
+
+        // Check for active background jobs
+        const hasActiveJobs = res.data.some((s: Statement) => 
+          s.status === "PENDING" || s.status === "PROCESSING"
+        );
+
+        if (hasActiveJobs) {
+          // Poll every 4 seconds
+          timeoutId = setTimeout(fetch_, 4000);
+        }
       } catch (err) {
-        console.error("Failed to fetch statements", err)
+        console.error("Failed to fetch statements", err);
       } finally {
-        setLoading(false)
+        setLoading(false);
       }
-    }
-    fetch_()
-  }, [])
+    };
+    
+    fetch_();
+
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, []);
 
   // Remove deleted row from state instantly without refetch
   React.useEffect(() => {
@@ -309,7 +355,16 @@ export default function StatementsList() {
       setStatements((prev) => prev.filter((s) => s._id !== id))
     }
     window.addEventListener('statement-deleted', handler)
-    return () => window.removeEventListener('statement-deleted', handler)
+    
+    const deleteHandler = (e: Event) => {
+      setDeleteDialog((e as CustomEvent).detail)
+    }
+    window.addEventListener('request-delete', deleteHandler)
+    
+    return () => {
+      window.removeEventListener('statement-deleted', handler)
+      window.removeEventListener('request-delete', deleteHandler)
+    }
   }, [])
 
   const table = useReactTable({
@@ -505,6 +560,49 @@ export default function StatementsList() {
             </div>
           )}
         </div>
+
+        {/* Custom Delete Confirmation Modal */}
+        {deleteDialog && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 animate-in fade-in duration-300">
+            <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setDeleteDialog(null)} />
+            <div className="relative w-full max-w-md bg-white rounded-[2rem] p-8 shadow-2xl border border-slate-100 flex flex-col items-center text-center space-y-6 animate-in zoom-in-95 duration-200">
+              <div className="w-16 h-16 rounded-2xl bg-red-50 text-red-500 flex items-center justify-center">
+                <IconTrash size={32} />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-bold text-slate-900">Delete Statement?</h3>
+                <p className="text-sm text-slate-500 leading-relaxed px-4">
+                  Are you sure you want to delete <span className="font-bold text-slate-700">"{deleteDialog.name}"</span>? 
+                  This action is permanent and will remove all audit data.
+                </p>
+              </div>
+              <div className="flex gap-3 w-full">
+                <Button 
+                  variant="outline" 
+                  className="flex-1 h-12 rounded-xl font-bold text-slate-500 border-slate-200" 
+                  onClick={() => setDeleteDialog(null)}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  className="flex-1 h-12 rounded-xl font-bold bg-red-500 hover:bg-red-600 border-0" 
+                  onClick={async () => {
+                    const id = deleteDialog.id;
+                    setDeleteDialog(null);
+                    try {
+                      await api.delete(`/api/statements/${id}`);
+                      window.dispatchEvent(new CustomEvent('statement-deleted', { detail: id }));
+                    } catch (err) {
+                      console.error("Delete failed from modal", err);
+                    }
+                  }}
+                >
+                  Delete Now
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
