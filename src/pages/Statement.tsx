@@ -5,7 +5,7 @@ import {
   IconDownload, IconArrowLeft, IconFileOff, IconLoader2,
   IconReceipt2, IconChartBar, IconCreditCard, IconCalendar,
   IconTrendingDown, IconTrendingUp, IconGift,
-  IconArrowUp, IconArrowDown, IconArrowsUpDown,
+  IconArrowUp, IconArrowDown, IconArrowsUpDown, IconAlertTriangle,
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -32,6 +32,7 @@ interface Transaction {
   amount: number
   type: "Debit" | "Credit"
   category: string
+  categoryConfidence?: number
   isRecurring: boolean
   isForex: boolean
   box: number[]
@@ -123,7 +124,8 @@ function SortHeader({ column, label }: { column: any; label: string }) {
 // ── Transaction Table Columns ──────────────────────────────────────────────
 function buildColumns(
   sym: string,
-  onRowClick: (tx: Transaction) => void
+  onRowClick: (tx: Transaction) => void,
+  onCategoryUpdate: (tx: Transaction, newCat: string) => void
 ): ColumnDef<Transaction>[] {
   return [
     {
@@ -155,13 +157,30 @@ function buildColumns(
       header: ({ column }) => <SortHeader column={column} label="Category" />,
       cell: ({ row }) => {
         const cat = row.original.category || 'Other'
+        const conf = row.original.categoryConfidence ?? 100
         return (
-          <span className={cn(
-            'text-[10px] font-bold px-2 py-0.5 rounded-full',
-            CATEGORY_COLORS[cat] ?? CATEGORY_COLORS.Other
-          )}>
-            {cat}
-          </span>
+          <div className="relative group flex items-center w-max">
+            <span className={cn(
+              'text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 group-hover:ring-2 ring-slate-200 transition-all cursor-pointer',
+              CATEGORY_COLORS[cat] ?? CATEGORY_COLORS.Other
+            )}>
+              {cat}
+              {conf < 80 && (
+                <IconAlertTriangle size={10} className="text-amber-500 opacity-80" />
+              )}
+            </span>
+            <select
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              value={cat}
+              onChange={(e) => onCategoryUpdate(row.original, e.target.value)}
+              onClick={(e) => e.stopPropagation()}
+              title="Change category"
+            >
+              {Object.keys(CATEGORY_COLORS).map(k => (
+                <option key={k} value={k}>{k}</option>
+              ))}
+            </select>
+          </div>
         )
       },
     },
@@ -418,8 +437,35 @@ export default function Statement() {
       document.getElementById(`pdf-page-${tx.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }
   }
+  const handleCategoryUpdate = async (tx: Transaction, newCat: string) => {
+    // Optimistic UI update
+    setData(prev => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        transactions: prev.transactions.map(t =>
+          (t._id && t._id === tx._id) || (!t._id && t.description === tx.description)
+            ? { ...t, category: newCat, categoryConfidence: 100 }
+            : t
+        )
+      };
+    });
 
-  const txColumns = buildColumns(data?.currency ? getCurrencySymbol(data.currency) : '₹', handleTxRowClick)
+    try {
+      if (tx.merchantName) {
+        await axios.post('/api/vendor-rules', {
+          merchantName: tx.merchantName,
+          category: newCat
+        }, {
+           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        });
+      }
+    } catch (e) {
+      console.error("Failed to save vendor rule:", e);
+    }
+  };
+
+  const txColumns = buildColumns(data?.currency ? getCurrencySymbol(data.currency) : '₹', handleTxRowClick, handleCategoryUpdate)
 
   const table = useReactTable({
     data: data?.transactions ?? [],
