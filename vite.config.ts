@@ -14,6 +14,9 @@ export default defineConfig({
       },
     },
   },
+  optimizeDeps: {
+    include: ['tesseract.js'],
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
