@@ -7,19 +7,28 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
+# Root level ignores
+.DS_Store
 .vscode/*
 !.vscode/extensions.json
 .idea
-.DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-.env
+
+# Frontend (creditUI)
+creditUI/node_modules
+creditUI/dist
+creditUI/dist-ssr
+creditUI/*.local
+creditUI/.env
+
+# Backend
+backend/node_modules
+backend/.env
+backend/dist
+backend/venv-ocr
+backend/__pycache__
+backend/*.pyc
