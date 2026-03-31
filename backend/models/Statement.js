@@ -95,6 +95,7 @@ const statementSchema = new mongoose.Schema({
     extractedDebits: Number,
     extractedCredits: Number,
     transactionCount: Number,
+    reasons: [String],
     checkedAt: Date
   },
   extractionQuality: {

@@ -79,7 +79,19 @@ interface StatementData {
   status?: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED"
   isApproved?: boolean
   extractionQuality?: 'verified' | 'minor_mismatch' | 'extraction_error' | 'unverified'
-  reconciliation?: any
+  reconciliation?: {
+    matched: boolean;
+    balanceDelta: number;
+    debitDelta: number;
+    creditDelta: number;
+    calculatedClosing: number;
+    expectedClosing: number;
+    extractedDebits: number;
+    extractedCredits: number;
+    transactionCount: number;
+    reasons?: string[];
+    checkedAt: string;
+  }
   reconciliationSummary?: any
 }
 
@@ -327,13 +339,22 @@ export default function Statement() {
 
   // ── Fetch data ────────────────────────────────────────────────────────────
   useEffect(() => {
+    let pollInterval: any = null;
+
     const load = async () => {
       if (id) {
         setIsSavedView(true)
         try {
           const { data } = await api.get(`/api/statements/${id}`)
           setData(data)
-          if (data.pdfStorageUrl) loadPdfFromUrl(data.pdfStorageUrl, data.pdfPassword)
+          if (data.pdfStorageUrl && pages.length === 0) loadPdfFromUrl(data.pdfStorageUrl, data.pdfPassword)
+          
+          // If still processing, setup polling
+          if ((data.status === 'PENDING' || data.status === 'PROCESSING') && !pollInterval) {
+            pollInterval = setInterval(load, 3000);
+          } else if (data.status === 'COMPLETED' || data.status === 'FAILED') {
+            if (pollInterval) clearInterval(pollInterval);
+          }
         } catch (e: any) {
           if (e.response?.status === 401) navigate('/login')
           else navigate('/statements')
@@ -351,6 +372,10 @@ export default function Statement() {
       }
     }
     load()
+
+    return () => {
+      if (pollInterval) clearInterval(pollInterval);
+    }
   }, [id])
 
   // ── PDF loaders ───────────────────────────────────────────────────────────
@@ -1179,8 +1204,25 @@ export default function Statement() {
                  <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest bg-white/50 px-2 py-1 rounded-lg">
                    {data.reconciliation.transactionCount} Extracted
                  </span>
-               </div>
-            </div>
+                </div>
+
+                {data.reconciliation.reasons && data.reconciliation.reasons.length > 0 && (
+                  <div className="bg-red-50/50 border border-red-100/50 rounded-2xl p-5 space-y-3 mt-4">
+                    <div className="flex items-center gap-1.5">
+                       <IconAlertTriangle size={14} className="text-red-500" />
+                       <span className="text-[10px] font-black text-red-600 uppercase tracking-widest">Diagnostic Findings</span>
+                    </div>
+                    <ul className="space-y-2">
+                       {data.reconciliation.reasons.map((reason, i) => (
+                         <li key={i} className="flex items-start gap-2 text-xs font-semibold text-slate-600 leading-tight">
+                           <span className="h-1 w-2 rounded-full bg-red-400 mt-1.5 shrink-0" />
+                           {reason}
+                         </li>
+                       ))}
+                    </ul>
+                  </div>
+                )}
+             </div>
           </div>
         </div>
       )}

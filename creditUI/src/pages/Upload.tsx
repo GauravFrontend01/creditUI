@@ -81,12 +81,12 @@ const Upload = () => {
 
     try {
       setUploadProgress(40);
-      await api.post('/api/statements', formData, {
+      const { data } = await api.post('/api/statements', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       
       setUploadProgress(100);
-      navigate('/statements');
+      navigate(`/statements/${data._id}`);
     } catch (err: any) {
       console.error('Upload failed', err);
       setIsUploading(false);

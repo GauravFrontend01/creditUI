@@ -94,7 +94,249 @@ Return ONLY valid JSON in this exact structure:
     "transactionCount": number
   },
   "summary": string
-}`;
+}
+`;
+
+const extractionSchema = {
+  description: "Credit card statement extraction schema",
+  type: "object",
+  properties: {
+    currency: { type: "string", description: "Primary currency ISO code (e.g. INR, USD)" },
+    bankName: { type: "string", description: "Cleaned up bank name (string only)" },
+    creditLimit: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    availableLimit: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    outstandingTotal: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    minPaymentDue: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    paymentDueDate: {
+      type: "object",
+      properties: { 
+        val: { type: "string" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    statementDate: {
+      type: "object",
+      properties: { 
+        val: { type: "string" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    statementPeriod: {
+      type: "object",
+      properties: { 
+        from: { type: "string" },
+        to: { type: "string" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["from", "to"]
+    },
+    previousBalance: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    lastPaymentAmount: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    lastPaymentDate: {
+      type: "object",
+      properties: { 
+        val: { type: "string" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    totalDebits: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    totalCredits: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    totalInterestCharged: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    totalLateFee: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    totalForexFee: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    totalFees: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
+    cashAdvance: {
+      type: "object",
+      properties: { 
+        amount: { type: "number" },
+        fee: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["amount"]
+    },
+    isRevolvingBalance: {
+      type: "object",
+      properties: { val: { type: "boolean" } },
+      required: ["val"]
+    },
+    rewardPointsEarned: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      }
+    },
+    rewardPointsRedeemed: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      }
+    },
+    rewardPointsBalance: {
+      type: "object",
+      properties: { 
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      }
+    },
+    rewardPointsExpiry: {
+      type: "object",
+      properties: { val: { type: "string" } }
+    },
+    transactions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          date: { type: "string" },
+          description: { type: "string" },
+          merchantName: { type: "string" },
+          amount: { type: "number" },
+          type: { type: "string", enum: ["Debit", "Credit"] },
+          category: { type: "string" },
+          categoryConfidence: { type: "number" },
+          isRecurring: { type: "boolean" },
+          isForex: { type: "boolean" },
+          box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+          page: { type: "number" }
+        },
+        required: ["date", "description", "amount", "type"]
+      }
+    },
+    emiList: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          amount: { type: "number" },
+          box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+          page: { type: "number" }
+        }
+      }
+    },
+    reconciliationSummary: {
+      type: "object",
+      properties: {
+        openingBalance: { type: "number" },
+        closingBalance: { type: "number" },
+        totalDebits: { type: "number" },
+        totalCredits: { type: "number" },
+        transactionCount: { type: "number" }
+      }
+    },
+    summary: { type: "string" }
+  },
+  required: ["bankName", "currency", "transactions", "reconciliationSummary"]
+};
 
 function round2(n) {
   return Math.round(n * 100) / 100;
@@ -118,15 +360,34 @@ function reconcileStatement(summary, transactions) {
   const balanceDelta = round2(Math.abs(calculatedClosing - closingBalance));
 
   // Secondary checks (if statement printed these)
-  const debitDelta = totalDebits != null 
-    ? round2(Math.abs(extractedDebits - totalDebits)) 
+  const debitDelta = totalDebits != null
+    ? round2(Math.abs(extractedDebits - totalDebits))
     : null;
 
-  const creditDelta = totalCredits != null 
-    ? round2(Math.abs(extractedCredits - totalCredits)) 
+  const creditDelta = totalCredits != null
+    ? round2(Math.abs(extractedCredits - totalCredits))
     : null;
 
   const matched = balanceDelta < 0.02; // 2 paise tolerance for float weirdness
+
+  const reasons = [];
+  if (!matched) {
+    if (debitDelta && debitDelta > 0.01) {
+      reasons.push(`Debit mismatch: Extracted ${extractedDebits.toFixed(2)} but summary says ${totalDebits.toFixed(2)}. Difference: ${debitDelta.toFixed(2)}.`);
+    }
+    if (creditDelta && creditDelta > 0.01) {
+      reasons.push(`Credit mismatch: Extracted ${extractedCredits.toFixed(2)} but summary says ${totalCredits.toFixed(2)}. Difference: ${creditDelta.toFixed(2)}.`);
+    }
+    if (balanceDelta > 0.01 && !debitDelta && !creditDelta) {
+      reasons.push(`Balance mismatch: The math (Opening + Debits - Credits) results in ${calculatedClosing.toFixed(2)}, but the PDF shows ${closingBalance.toFixed(2)}.`);
+    }
+    if (summary.transactionCount && summary.transactionCount !== transactions.length) {
+      reasons.push(`Count mismatch: Summary shows ${summary.transactionCount} transactions, but only ${transactions.length} were extracted.`);
+    }
+    if (reasons.length === 0) {
+      reasons.push("Calculation mismatch: An unidentified discrepancy exists between the extracted data and the statement summary.");
+    }
+  }
 
   return {
     matched,
@@ -137,7 +398,8 @@ function reconcileStatement(summary, transactions) {
     expectedClosing: closingBalance,
     extractedDebits,
     extractedCredits,
-    transactionCount: transactions.length
+    transactionCount: transactions.length,
+    reasons
   };
 }
 
@@ -150,9 +412,15 @@ exports.processStatement = async (statementId, pdfBuffer) => {
     statement.status = 'PROCESSING';
     await statement.save();
 
-    // Call Gemini Vision
-    const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
-    
+    // 2. Call Gemini
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-2.5-flash-lite",
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: extractionSchema,
+      }
+    });
+
     let result = null;
     let text = "";
     let extraction = null;
@@ -174,11 +442,11 @@ exports.processStatement = async (statementId, pdfBuffer) => {
 
         const response = await result.response;
         text = response.text();
-        
+
         // Clean JSON markdown if any
         const cleanedText = text.replace(/```json/g, "").replace(/```/g, "").trim();
         extraction = JSON.parse(cleanedText);
-        
+
         break; // Success! Break out of the retry loop.
       } catch (err) {
         attempt++;
@@ -209,48 +477,45 @@ exports.processStatement = async (statementId, pdfBuffer) => {
       });
     }
 
-    // 4. Update Statement with full data
     // Detect bank name if not explicitly provided
-    let detectedBank = extraction.bankName || statement.bankName;
-    if (detectedBank === 'Unknown Bank') {
-        const banks = ['HSBC', 'HDFC', 'ICICI', 'AXIS', 'KOTAK', 'SBI', 'AMEX', 'CHASE', 'CITI', 'BARCLAYS'];
-        const searchStr = JSON.stringify(extraction).toUpperCase();
-        for (const bank of banks) {
-          if (searchStr.includes(bank)) { detectedBank = `${bank} Credit Card`; break; }
-        }
+    let detectedBank = extraction.bankName || statement.bankName || 'Unknown Bank';
+    
+    // Safety check for legacy or malformed responses
+    if (typeof detectedBank === 'object' && detectedBank !== null) {
+      detectedBank = detectedBank.val || detectedBank.name || 'Unknown Bank';
     }
 
     Object.assign(statement, {
-        status: 'COMPLETED',
-        bankName: detectedBank,
-        currency: extraction.currency || 'INR',
-        creditLimit: extraction.creditLimit,
-        availableLimit: extraction.availableLimit,
-        outstandingTotal: extraction.outstandingTotal,
-        minPaymentDue: extraction.minPaymentDue,
-        paymentDueDate: extraction.paymentDueDate,
-        statementDate: extraction.statementDate,
-        statementPeriod: extraction.statementPeriod,
-        previousBalance: extraction.previousBalance,
-        lastPaymentAmount: extraction.lastPaymentAmount,
-        lastPaymentDate: extraction.lastPaymentDate,
-        totalDebits: extraction.totalDebits,
-        totalCredits: extraction.totalCredits,
-        totalInterestCharged: extraction.totalInterestCharged,
-        totalLateFee: extraction.totalLateFee,
-        totalForexFee: extraction.totalForexFee,
-        totalFees: extraction.totalFees,
-        cashAdvance: extraction.cashAdvance,
-        isRevolvingBalance: extraction.isRevolvingBalance,
-        rewardPointsEarned: extraction.rewardPointsEarned,
-        rewardPointsRedeemed: extraction.rewardPointsRedeemed,
-        rewardPointsBalance: extraction.rewardPointsBalance,
-        rewardPointsExpiry: extraction.rewardPointsExpiry,
-        transactions: extraction.transactions,
-        emiList: extraction.emiList,
-        reconciliationSummary: extraction.reconciliationSummary,
-        summary: extraction.summary,
-        isApproved: false // User must approve later
+      status: 'COMPLETED',
+      bankName: detectedBank,
+      currency: extraction.currency || 'INR',
+      creditLimit: extraction.creditLimit,
+      availableLimit: extraction.availableLimit,
+      outstandingTotal: extraction.outstandingTotal,
+      minPaymentDue: extraction.minPaymentDue,
+      paymentDueDate: extraction.paymentDueDate,
+      statementDate: extraction.statementDate,
+      statementPeriod: extraction.statementPeriod,
+      previousBalance: extraction.previousBalance,
+      lastPaymentAmount: extraction.lastPaymentAmount,
+      lastPaymentDate: extraction.lastPaymentDate,
+      totalDebits: extraction.totalDebits,
+      totalCredits: extraction.totalCredits,
+      totalInterestCharged: extraction.totalInterestCharged,
+      totalLateFee: extraction.totalLateFee,
+      totalForexFee: extraction.totalForexFee,
+      totalFees: extraction.totalFees,
+      cashAdvance: extraction.cashAdvance,
+      isRevolvingBalance: extraction.isRevolvingBalance,
+      rewardPointsEarned: extraction.rewardPointsEarned,
+      rewardPointsRedeemed: extraction.rewardPointsRedeemed,
+      rewardPointsBalance: extraction.rewardPointsBalance,
+      rewardPointsExpiry: extraction.rewardPointsExpiry,
+      transactions: extraction.transactions,
+      emiList: extraction.emiList,
+      reconciliationSummary: extraction.reconciliationSummary,
+      summary: extraction.summary,
+      isApproved: false // User must approve later
     });
 
     let severity = 'unverified';
@@ -268,11 +533,11 @@ exports.processStatement = async (statementId, pdfBuffer) => {
           expectedDebits: extraction.reconciliationSummary.totalDebits,
           txCount: extraction.transactions.length
         });
-        
+
         severity = rec.balanceDelta < 10 ? 'minor_mismatch' : 'extraction_error';
       }
     }
-    
+
     statement.extractionQuality = severity;
 
     await statement.save();
