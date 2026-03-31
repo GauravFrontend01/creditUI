@@ -7,6 +7,7 @@ import Signup from "@/pages/Signup"
 import StatementsList from "@/pages/StatementsList"
 import TesseractOCR from "@/pages/TesseractOCR"
 import Upload from "@/pages/Upload"
+import Dummy from "@/pages/Dummy"
 import { AuthProvider } from "@/context/AuthContext"
 import { ProtectedRoute } from "@/components/ProtectedRoute"
 
@@ -30,6 +31,7 @@ export function App() {
                     <Route path="/chat" element={<Chat />} />
                     <Route path="/tersract" element={<TesseractOCR />} />
                     <Route path="/upload" element={<Upload />} />
+                    <Route path="/dummy" element={<Dummy />} />
                   </Routes>
                 </DashboardLayout>
               </ProtectedRoute>

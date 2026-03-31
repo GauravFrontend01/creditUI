@@ -1,7 +1,7 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
-import { IconLayoutSidebar, IconHome, IconSettings, IconUsers, IconChevronLeft, IconChevronRight, IconFileText, IconMessage, IconLogout, IconScan, IconUpload } from "@tabler/icons-react"
+import { IconLayoutSidebar, IconHome, IconSettings, IconUsers, IconChevronLeft, IconChevronRight, IconFileText, IconMessage, IconLogout, IconScan, IconUpload, IconTerminal2 } from "@tabler/icons-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
@@ -30,6 +30,7 @@ export function Sidebar({ expanded, setExpanded, className }: SidebarProps) {
     { icon: IconUpload, label: "Upload Audit", href: "/upload" },
     { icon: IconFileText, label: "My Statements", href: "/statements" },
     { icon: IconMessage, label: "Krishna Chat", href: "/chat" },
+    { icon: IconTerminal2, label: "Neural Injection", href: "/dummy" },
     { icon: IconScan, label: "Tesseract OCR", href: "/tersract" },
     { icon: IconUsers, label: "Users", href: "/users" },
     { icon: IconSettings, label: "Settings", href: "/settings" },
