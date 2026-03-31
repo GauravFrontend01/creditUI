@@ -119,6 +119,7 @@ const statementSchema = new mongoose.Schema({
   isApproved: { type: Boolean, default: false },
 
   createdAt: { type: Date, default: Date.now },
+  rawAIResponse: { type: mongoose.Schema.Types.Mixed },
 });
 
 module.exports = mongoose.model('Statement', statementSchema);

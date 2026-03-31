@@ -93,6 +93,7 @@ interface StatementData {
     checkedAt: string;
   }
   reconciliationSummary?: any
+  rawAIResponse?: any
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -317,7 +318,7 @@ function TabBtn({
 }
 
 // ── Main Component ─────────────────────────────────────────────────────────
-export default function Statement() {
+function Statement() {
   const [data, setData] = useState<StatementData | null>(null)
   const [pages, setPages] = useState<string[]>([])
   const [loadingPdf, setLoadingPdf] = useState(false)
@@ -336,6 +337,7 @@ export default function Statement() {
   const rootRef = useRef<HTMLDivElement>(null)
   const pdfPaneRef = useRef<HTMLDivElement>(null)
   const tablePaneRef = useRef<HTMLDivElement>(null)
+  const [showRawJson, setShowRawJson] = useState(false)
 
   // ── Fetch data ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -709,6 +711,17 @@ export default function Statement() {
                    className="rounded-xl px-6 h-11 gap-2 bg-emerald-600 hover:bg-emerald-700 shadow-[0_8px_16px_-6px_rgba(16,185,129,0.3)] font-bold text-xs uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98]"
                  >
                    <IconCheck size={16} strokeWidth={3} /> Approve Audit
+                 </Button>
+               )}
+
+               {isSavedView && (
+                 <Button 
+                   variant="ghost" 
+                   size="sm" 
+                   onClick={() => setShowRawJson(true)}
+                   className="h-11 px-4 rounded-xl border border-slate-100/50 hover:bg-slate-50 transition-all font-mono text-[10px] font-bold text-slate-400 hover:text-slate-900 uppercase tracking-widest"
+                 >
+                   Raw Data
                  </Button>
                )}
 
@@ -1227,6 +1240,50 @@ export default function Statement() {
         </div>
       )}
 
+      {/* Raw JSON Overlay Modal */}
+      {showRawJson && (
+        <div className="fixed inset-0 z-[3000] flex items-center justify-center p-6 sm:p-12">
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" onClick={() => setShowRawJson(false)} />
+          <div className="relative w-full max-w-5xl h-full max-h-[85vh] bg-[#0d1117] rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col border border-white/10 animate-in fade-in zoom-in-95 duration-300">
+             <div className="px-8 py-6 border-b border-white/5 flex items-center justify-between shrink-0 bg-slate-900">
+                <div className="flex items-center gap-4">
+                  <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                    <IconMath size={20} className="text-primary" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-black text-white uppercase tracking-tight">Neural Raw Capture</h2>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Gemini 2.5 Flash Lite Production Payload</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowRawJson(false)} className="h-10 w-10 flex items-center justify-center rounded-full hover:bg-white/10 text-slate-400 transition-colors">
+                  <IconX size={20} />
+                </button>
+             </div>
+
+             <div className="flex-1 overflow-auto p-8 font-mono text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap">
+                {data.rawAIResponse ? JSON.stringify(data.rawAIResponse, null, 2) : "No raw response stored for this record."}
+             </div>
+
+             <div className="px-8 py-4 bg-slate-900/50 border-t border-white/5 flex items-center justify-between shrink-0">
+                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-[0.2em]">Source: Structured Extraction v2.5 (Authenticated)</p>
+                <Button 
+                   size="sm" 
+                   variant="outline" 
+                   className="rounded-xl border-white/10 text-white hover:bg-white/5"
+                   onClick={() => {
+                        navigator.clipboard.writeText(JSON.stringify(data.rawAIResponse, null, 2));
+                        setToast({ message: "Payload copied to clipboard", visible: true, type: 'success' });
+                        setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+                   }}
+                >
+                    Copy JSON
+                </Button>
+             </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+
+export default Statement

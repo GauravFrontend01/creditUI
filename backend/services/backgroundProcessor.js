@@ -446,6 +446,10 @@ exports.processStatement = async (statementId, pdfBuffer) => {
         // Clean JSON markdown if any
         const cleanedText = text.replace(/```json/g, "").replace(/```/g, "").trim();
         extraction = JSON.parse(cleanedText);
+        
+        // Save raw AI response for debugging
+        statement.rawAIResponse = extraction;
+        await statement.save();
 
         break; // Success! Break out of the retry loop.
       } catch (err) {

@@ -101,7 +101,7 @@ exports.approveStatement = async (req, res) => {
 exports.getMyStatements = async (req, res) => {
   try {
     const statements = await Statement.find({ user: req.user._id })
-      .select('-pdfStorageUrl -pdfPassword') // don't leak URL/password in list
+      .select('-pdfStorageUrl -pdfPassword -rawAIResponse') // don't leak URL/password/raw payload in list
       .sort({ createdAt: -1 });
     res.json(statements);
   } catch (error) {
