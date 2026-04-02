@@ -28,7 +28,9 @@ export default function Dummy() {
   const calculateReconciliation = (data: any) => {
     try {
       const txs = data.transactions || [];
-      const extractedDebits = txs.filter((t: any) => t.type === 'Debit').reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
+      const extractedDebits = txs
+        .filter((t: any) => t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI'))
+        .reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
       const extractedCredits = txs.filter((t: any) => t.type === 'Credit').reduce((sum: number, t: any) => sum + (t.amount || 0), 0);
       
       const summary = data.reconciliationSummary || {};

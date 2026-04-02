@@ -38,7 +38,7 @@ RECONCILIATION SUMMARY QUIRKS:
 Return ONLY valid JSON in this exact structure:
 {
   "currency": string,
-  "bankName": string,
+  "bankName": { "val": string, "box": [number, number, number, number], "page": number },
   "creditLimit": { "val": number, "box": [number, number, number, number], "page": number },
   "availableLimit": { "val": number, "box": [number, number, number, number], "page": number },
   "outstandingTotal": { "val": number, "box": [number, number, number, number], "page": number },
@@ -102,10 +102,18 @@ const extractionSchema = {
   type: "object",
   properties: {
     currency: { type: "string", description: "Primary currency ISO code (e.g. INR, USD)" },
-    bankName: { type: "string", description: "Cleaned up bank name (string only)" },
+    bankName: {
+      type: "object",
+      properties: {
+        val: { type: "string" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      },
+      required: ["val"]
+    },
     creditLimit: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -114,7 +122,7 @@ const extractionSchema = {
     },
     availableLimit: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -123,7 +131,7 @@ const extractionSchema = {
     },
     outstandingTotal: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -132,7 +140,7 @@ const extractionSchema = {
     },
     minPaymentDue: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -141,7 +149,7 @@ const extractionSchema = {
     },
     paymentDueDate: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "string" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -150,7 +158,7 @@ const extractionSchema = {
     },
     statementDate: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "string" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -159,7 +167,7 @@ const extractionSchema = {
     },
     statementPeriod: {
       type: "object",
-      properties: { 
+      properties: {
         from: { type: "string" },
         to: { type: "string" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
@@ -169,7 +177,7 @@ const extractionSchema = {
     },
     previousBalance: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -178,7 +186,7 @@ const extractionSchema = {
     },
     lastPaymentAmount: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -187,7 +195,7 @@ const extractionSchema = {
     },
     lastPaymentDate: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "string" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -196,7 +204,7 @@ const extractionSchema = {
     },
     totalDebits: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -205,7 +213,7 @@ const extractionSchema = {
     },
     totalCredits: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -214,7 +222,7 @@ const extractionSchema = {
     },
     totalInterestCharged: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -223,7 +231,7 @@ const extractionSchema = {
     },
     totalLateFee: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -232,7 +240,7 @@ const extractionSchema = {
     },
     totalForexFee: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -241,7 +249,7 @@ const extractionSchema = {
     },
     totalFees: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -250,7 +258,7 @@ const extractionSchema = {
     },
     cashAdvance: {
       type: "object",
-      properties: { 
+      properties: {
         amount: { type: "number" },
         fee: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
@@ -265,7 +273,7 @@ const extractionSchema = {
     },
     rewardPointsEarned: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -273,7 +281,7 @@ const extractionSchema = {
     },
     rewardPointsRedeemed: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -281,7 +289,7 @@ const extractionSchema = {
     },
     rewardPointsBalance: {
       type: "object",
-      properties: { 
+      properties: {
         val: { type: "number" },
         box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
         page: { type: "number" }
@@ -347,12 +355,15 @@ function reconcileStatement(summary, transactions) {
   const { openingBalance = 0, closingBalance = 0, totalDebits = null, totalCredits = null } = summary;
 
   // Sum extracted transactions by type
+  // ROOT CAUSE FIX: Exclude fixed payments (FP) from transaction sums to prevent double counting
+  // Fixed payments are generally merchant EMIs that are already accounted for elsewhere 
+  // or are part of the previous balance loan bucket.
   const extractedDebits = transactions
-    .filter(t => t.type === 'Debit' || t.type === 'debit')
+    .filter(t => (t.type === 'Debit' || t.type === 'debit') && !t.description?.toUpperCase().includes('FP EMI'))
     .reduce((sum, t) => sum + t.amount, 0);
 
   const extractedCredits = transactions
-    .filter(t => t.type === 'Credit' || t.type === 'credit')
+    .filter(t => (t.type === 'Credit' || t.type === 'credit'))
     .reduce((sum, t) => sum + t.amount, 0);
 
   // Core equation: opening + debits - credits = closing
@@ -413,8 +424,8 @@ exports.processStatement = async (statementId, pdfBuffer) => {
     await statement.save();
 
     // 2. Call Gemini
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-2.5-flash-lite",
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.5-flash",
       generationConfig: {
         responseMimeType: "application/json",
         responseSchema: extractionSchema,
@@ -446,7 +457,7 @@ exports.processStatement = async (statementId, pdfBuffer) => {
         // Clean JSON markdown if any
         const cleanedText = text.replace(/```json/g, "").replace(/```/g, "").trim();
         extraction = JSON.parse(cleanedText);
-        
+
         // Save raw AI response for debugging
         statement.rawAIResponse = extraction;
         await statement.save();
@@ -481,17 +492,25 @@ exports.processStatement = async (statementId, pdfBuffer) => {
       });
     }
 
-    // Detect bank name if not explicitly provided
-    let detectedBank = extraction.bankName || statement.bankName || 'Unknown Bank';
-    
-    // Safety check for legacy or malformed responses
-    if (typeof detectedBank === 'object' && detectedBank !== null) {
-      detectedBank = detectedBank.val || detectedBank.name || 'Unknown Bank';
+    // Detect bank name capturing the full annotated object
+    let finalBankName = { val: 'Unknown Bank', box: [], page: 0 };
+    const rawBank = extraction.bankName;
+
+    if (typeof rawBank === 'object' && rawBank !== null) {
+      finalBankName = {
+        val: rawBank.val || 'Unknown Bank',
+        box: Array.isArray(rawBank.box) ? rawBank.box : [],
+        page: rawBank.page || 0
+      };
+    } else if (typeof rawBank === 'string') {
+      finalBankName.val = rawBank;
+    } else if (statement.bankName?.val) {
+      finalBankName = statement.bankName;
     }
 
     Object.assign(statement, {
       status: 'COMPLETED',
-      bankName: detectedBank,
+      bankName: finalBankName,
       currency: extraction.currency || 'INR',
       creditLimit: extraction.creditLimit,
       availableLimit: extraction.availableLimit,

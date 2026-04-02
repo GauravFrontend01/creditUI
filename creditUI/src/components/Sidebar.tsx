@@ -32,6 +32,7 @@ export function Sidebar({ expanded, setExpanded, className }: SidebarProps) {
     { icon: IconMessage, label: "Krishna Chat", href: "/chat" },
     { icon: IconTerminal2, label: "Neural Injection", href: "/dummy" },
     { icon: IconScan, label: "Tesseract OCR", href: "/tersract" },
+    { icon: IconScan, label: "GLM OCR", href: "/glm-ocr" },
     { icon: IconUsers, label: "Users", href: "/users" },
     { icon: IconSettings, label: "Settings", href: "/settings" },
   ]

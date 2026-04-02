@@ -51,7 +51,7 @@ interface StatStr { val?: string; box?: number[]; page?: number }
 
 interface StatementData {
   _id: string
-  bankName: string
+  bankName: StatStr
   currency: string
   creditLimit?: StatVal
   availableLimit?: StatVal
@@ -368,7 +368,17 @@ function Statement() {
         const name = sessionStorage.getItem('pdf_raw_name')
         if (raw && b64) {
           const parsed = JSON.parse(raw)
-          setData({ ...parsed, _id: '', bankName: parsed.bankName || name || 'Statement', transactions: parsed.transactions || [], emiList: parsed.emiList || [] })
+          const finalBankName = typeof parsed.bankName === 'object' && parsed.bankName !== null
+            ? parsed.bankName
+            : { val: parsed.bankName || name || 'Statement', box: [], page: 0 };
+
+          setData({ 
+            ...parsed, 
+            _id: '', 
+            bankName: finalBankName, 
+            transactions: parsed.transactions || [], 
+            emiList: parsed.emiList || [] 
+          })
           loadPdfFromBase64(b64, pass || '')
         } else navigate('/')
       }
@@ -596,9 +606,14 @@ function Statement() {
     ? Math.round(((data.outstandingTotal?.val ?? 0) / data.creditLimit.val) * 100) : 0
 
   // Compute totals directly from transactions — always matches what user sees
-  const txTotalDebits  = txs.filter(t => t.type === 'Debit').reduce((s, t) => s + t.amount, 0)
+  // ROOT CAUSE FIX: Exclude merchant EMIs (mostly SBI Card "FP EMI") from sums to prevent double counting
+  const txTotalDebits  = txs
+    .filter(t => t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI'))
+    .reduce((s, t) => s + t.amount, 0)
   const txTotalCredits = txs.filter(t => t.type === 'Credit').reduce((s, t) => s + t.amount, 0)
-  const txTotalFees    = txs.filter(t => t.category === 'Fee' && t.type === 'Debit').reduce((s, t) => s + t.amount, 0)
+  const txTotalFees    = txs
+    .filter(t => t.category === 'Fee' && t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI'))
+    .reduce((s, t) => s + t.amount, 0)
 
 
   return (
@@ -624,7 +639,9 @@ function Statement() {
               <div className="h-5 w-5 rounded bg-primary/10 flex items-center justify-center">
                 <IconCreditCard size={12} className="text-primary" />
               </div>
-              <span className="text-xs font-bold text-slate-900">{data.bankName}</span>
+              <span className="text-xs font-bold text-slate-900">
+                {typeof data.bankName === 'object' ? data.bankName?.val : data.bankName}
+              </span>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -688,7 +705,9 @@ function Statement() {
         <div className="shrink-0 px-6 py-4 border-b bg-white">
           <div className="flex items-start justify-between gap-6 flex-wrap">
             <div>
-              <h2 className="text-lg font-black text-slate-900 tracking-tight">{data.bankName}</h2>
+              <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                {typeof data.bankName === 'object' ? data.bankName?.val : data.bankName}
+              </h2>
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">
                 {data.statementDate?.val && `Statement: ${data.statementDate.val}`}
                 {data.paymentDueDate?.val && ` · Due: ${data.paymentDueDate.val}`}

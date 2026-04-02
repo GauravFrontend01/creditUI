@@ -45,7 +45,7 @@ import { cn } from "@/lib/utils"
 // ── Types ──────────────────────────────────────────────────────────────────
 interface Statement {
   _id: string
-  bankName: string
+  bankName: { val: string; box?: number[]; page?: number }
   createdAt: string
   creditLimit?: { val: number }
   availableLimit?: { val: number }
@@ -90,7 +90,8 @@ function SortHeader({ column, label }: { column: any; label: string }) {
 // ── Column Definitions ─────────────────────────────────────────────────────
 const columns: ColumnDef<Statement>[] = [
   {
-    accessorKey: "bankName",
+    accessorKey: "bankName.val",
+    id: "bankName",
     header: ({ column }) => <SortHeader column={column} label="Bank / Statement" />,
     cell: ({ row }) => (
       <div className="flex items-center gap-3">
@@ -98,7 +99,9 @@ const columns: ColumnDef<Statement>[] = [
           <IconCreditCard size={18} />
         </div>
         <div>
-          <p className="font-bold text-sm text-slate-900 leading-tight">{row.original.bankName}</p>
+          <p className="font-bold text-sm text-slate-900 leading-tight">
+            {typeof row.original.bankName === 'object' ? row.original.bankName.val : row.original.bankName}
+          </p>
           <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">
             {new Date(row.original.createdAt).toLocaleDateString("en-GB", {
               day: "2-digit",
@@ -109,6 +112,13 @@ const columns: ColumnDef<Statement>[] = [
         </div>
       </div>
     ),
+  },
+  {
+    accessorKey: "createdAt",
+    id: "createdAt",
+    header: () => null,
+    cell: () => null,
+    enableHiding: true,
   },
   {
     id: "auditStatus",
@@ -247,7 +257,7 @@ const columns: ColumnDef<Statement>[] = [
     header: () => null,
     cell: ({ row }) => {
       const id = row.original._id
-      const name = row.original.bankName
+      const name = typeof row.original.bankName === 'object' ? row.original.bankName.val : row.original.bankName
       return (
         <div className="flex justify-end pr-2" onClick={(e) => e.stopPropagation()}>
           <DeleteButton statementId={id} bankName={name} />

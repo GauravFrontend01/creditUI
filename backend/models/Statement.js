@@ -35,7 +35,7 @@ const statementSchema = new mongoose.Schema({
     required: true,
     ref: 'User',
   },
-  bankName:         { type: String, default: 'Unknown Bank' },
+  bankName:         { val: { type: String, default: 'Unknown Bank' }, box: boxField, page: Number },
   currency:         { type: String, default: 'INR' },
 
   // ── Key Balances ──────────────────────────────────────────────────────────
