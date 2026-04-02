@@ -173,3 +173,45 @@ exports.deleteStatement = async (req, res) => {
     res.status(500).json({ message: 'Server error' });
   }
 };
+
+// @desc    Delete multiple statements by IDs
+// @route   POST /api/statements/bulk-delete
+// @access  Private
+exports.deleteManyStatements = async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!ids || !Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ message: 'No IDs provided' });
+    }
+
+    const statements = await Statement.find({
+      _id: { $in: ids },
+      user: req.user._id
+    });
+
+    if (statements.length === 0) {
+      return res.status(404).json({ message: 'No statements found' });
+    }
+
+    // Delete PDFs from Supabase Storage
+    const fileNames = statements
+      .map(s => s.pdfFileName)
+      .filter(Boolean);
+
+    if (fileNames.length > 0) {
+      const { error: removeError } = await supabase
+        .storage
+        .from(BUCKET)
+        .remove(fileNames);
+
+      if (removeError) console.error('Supabase bulk remove error:', removeError);
+    }
+
+    await Statement.deleteMany({ _id: { $in: statements.map(s => s._id) } });
+    res.json({ message: `${statements.length} statements deleted` });
+  } catch (error) {
+    console.error('Bulk delete error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+

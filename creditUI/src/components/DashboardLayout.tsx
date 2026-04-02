@@ -24,7 +24,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       */}
       <Sidebar expanded={expanded} setExpanded={setExpanded} />
 
-      <main className="flex-1 min-w-0 h-screen bg-background relative overflow-hidden">
+      <main className="flex-1 min-w-0 h-screen bg-background relative overflow-auto">
         {children}
       </main>
     </div>

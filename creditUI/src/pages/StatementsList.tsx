@@ -23,8 +23,6 @@ import {
   IconPlus,
   IconLoader2,
   IconTrash,
-  IconChevronLeft,
-  IconChevronRight,
   IconCreditCard,
   IconReceipt2,
   IconTrendingUp,
@@ -89,6 +87,32 @@ function SortHeader({ column, label }: { column: any; label: string }) {
 
 // ── Column Definitions ─────────────────────────────────────────────────────
 const columns: ColumnDef<Statement>[] = [
+  {
+    id: "select",
+    header: ({ table }) => (
+      <div className="flex items-center justify-center pl-2">
+        <input
+          type="checkbox"
+          className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary/20 accent-primary"
+          checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate" as any)}
+          onChange={table.getToggleAllPageRowsSelectedHandler()}
+        />
+      </div>
+    ),
+    cell: ({ row }) => (
+      <div className="flex items-center justify-center pl-2" onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary/20 accent-primary"
+          checked={row.getIsSelected()}
+          disabled={!row.getCanSelect()}
+          onChange={row.getToggleSelectedHandler()}
+        />
+      </div>
+    ),
+    enableSorting: false,
+    enableHiding: false,
+  },
   {
     accessorKey: "bankName.val",
     id: "bankName",
@@ -325,6 +349,8 @@ export default function StatementsList() {
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({})
   const [globalFilter, setGlobalFilter] = React.useState("")
   const [deleteDialog, setDeleteDialog] = React.useState<{id: string, name: string} | null>(null)
+  const [rowSelection, setRowSelection] = React.useState({})
+  const [isBulkDeleting, setIsBulkDeleting] = React.useState(false)
   const navigate = useNavigate()
 
   React.useEffect(() => {
@@ -380,7 +406,9 @@ export default function StatementsList() {
   const table = useReactTable({
     data: statements,
     columns,
-    state: { sorting, columnFilters, columnVisibility, globalFilter },
+    state: { sorting, columnFilters, columnVisibility, globalFilter, rowSelection },
+    enableRowSelection: true,
+    onRowSelectionChange: setRowSelection,
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
     onColumnVisibilityChange: setColumnVisibility,
@@ -389,7 +417,8 @@ export default function StatementsList() {
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: 10 } },
+    getRowId: (row) => row._id,
+    initialState: { pagination: { pageSize: 10000 } },
   })
 
   // ── Aggregate stats ──
@@ -409,7 +438,7 @@ export default function StatementsList() {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans">
-      <div className="max-w-[1200px] mx-auto px-8 py-10 space-y-8">
+      <div className="max-w-[1600px] mx-auto px-8 py-10 space-y-8">
 
         {/* ── Header ── */}
         <div className="flex items-center justify-between">
@@ -466,33 +495,72 @@ export default function StatementsList() {
 
           {/* Toolbar */}
           <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-4">
-            <div className="relative flex-1 max-w-sm">
-              <IconSearch
-                size={15}
-                className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
-              />
-              <input
-                type="text"
-                placeholder="Search statements..."
-                value={globalFilter}
-                onChange={(e) => setGlobalFilter(e.target.value)}
-                className="w-full h-9 pl-9 pr-4 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:bg-white transition-all"
-              />
+            <div className="flex items-center gap-4 flex-1">
+              <div className="relative flex-1 max-w-sm">
+                <IconSearch
+                  size={15}
+                  className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  type="text"
+                  placeholder="Search statements..."
+                  value={globalFilter}
+                  onChange={(e) => setGlobalFilter(e.target.value)}
+                  className="w-full h-9 pl-9 pr-4 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:bg-white transition-all"
+                />
+              </div>
+              
+              {Object.keys(rowSelection).length > 0 && (
+                <div className="flex items-center gap-2 animate-in slide-in-from-left-2 duration-200">
+                  <div className="h-4 w-[1px] bg-slate-200 mx-1" />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-9 px-4 gap-2 text-red-500 hover:bg-red-50 hover:text-red-600 font-bold text-xs rounded-xl"
+                    onClick={async () => {
+                      const selectedIds = Object.keys(rowSelection);
+                      if (confirm(`Delete ${selectedIds.length} statements? This action cannot be undone.`)) {
+                        setIsBulkDeleting(true);
+                        try {
+                          await api.post("/api/statements/bulk-delete", { ids: selectedIds });
+                          setStatements(prev => prev.filter(s => !selectedIds.includes(s._id)));
+                          setRowSelection({});
+                        } catch (err) {
+                          console.error("Bulk delete failed", err);
+                          alert("Failed to delete statements. Please try again.");
+                        } finally {
+                          setIsBulkDeleting(false);
+                        }
+                      }
+                    }}
+                    disabled={isBulkDeleting}
+                  >
+                    {isBulkDeleting ? (
+                      <IconLoader2 size={14} className="animate-spin" />
+                    ) : (
+                      <IconTrash size={14} />
+                    )}
+                    Delete ({Object.keys(rowSelection).length})
+                  </Button>
+                </div>
+              )}
             </div>
+            
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest shrink-0">
               {table.getFilteredRowModel().rows.length} results
             </p>
           </div>
 
-          {/* Table */}
-          <Table>
+          {/* Table Container with Scroll */}
+          <div className="max-h-[600px] overflow-auto custom-scrollbar">
+            <Table>
             <TableHeader>
               {table.getHeaderGroups().map((hg) => (
                 <TableRow key={hg.id} className="bg-slate-50/80 hover:bg-slate-50/80 border-b border-slate-100">
                   {hg.headers.map((h) => (
                     <TableHead
                       key={h.id}
-                      className="px-6 py-3 first:pl-6 last:pr-6"
+                      className="px-6 py-3 first:pl-6 last:pr-6 sticky top-0 bg-slate-50/95 z-10 backdrop-blur-sm shadow-sm"
                     >
                       {h.isPlaceholder
                         ? null
@@ -540,35 +608,7 @@ export default function StatementsList() {
               )}
             </TableBody>
           </Table>
-
-          {/* Pagination */}
-          {table.getPageCount() > 1 && (
-            <div className="px-6 py-4 border-t border-slate-100 flex items-center justify-between">
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">
-                Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
-              </p>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 w-8 p-0 rounded-lg border-slate-200"
-                  onClick={() => table.previousPage()}
-                  disabled={!table.getCanPreviousPage()}
-                >
-                  <IconChevronLeft size={14} />
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 w-8 p-0 rounded-lg border-slate-200"
-                  onClick={() => table.nextPage()}
-                  disabled={!table.getCanNextPage()}
-                >
-                  <IconChevronRight size={14} />
-                </Button>
-              </div>
-            </div>
-          )}
+        </div>
         </div>
 
         {/* Custom Delete Confirmation Modal */}
