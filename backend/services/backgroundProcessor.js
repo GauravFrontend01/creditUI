@@ -642,7 +642,7 @@ function reconcileStatement(summary, transactions) {
   };
 }
 
-exports.processStatement = async (statementId, pdfBuffer) => {
+const processStatementInBackground = async (statementId, pdfBuffer) => {
   // Wait a small bit to ensure the DB record is fully persisted if multiple processes are flickering
   await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -713,111 +713,13 @@ exports.processStatement = async (statementId, pdfBuffer) => {
       }
     }
 
-    // 3. Apply Vendor Rules
-    const userRules = await VendorRule.find({ user: statement.user });
-    const rulesMap = new Map();
-    userRules.forEach(rule => rulesMap.set(rule.merchantName, rule.category));
-
-    if (extraction.transactions && Array.isArray(extraction.transactions)) {
-      extraction.transactions = extraction.transactions.map(tx => {
-        if (tx.merchantName && rulesMap.has(tx.merchantName)) {
-          return {
-            ...tx,
-            category: rulesMap.get(tx.merchantName),
-            categoryConfidence: 100
-          };
-        }
-        return tx;
-      });
-    }
-
-    // Detect bank name capturing the full annotated object
-    let finalBankName = { val: 'Unknown Bank', box: [], page: 0 };
-    const rawBank = extraction.bankName;
-
-    if (typeof rawBank === 'object' && rawBank !== null) {
-      finalBankName = {
-        val: rawBank.val || 'Unknown Bank',
-        box: Array.isArray(rawBank.box) ? rawBank.box : [],
-        page: rawBank.page || 0
-      };
-    } else if (typeof rawBank === 'string') {
-      finalBankName.val = rawBank;
-    } else if (statement.bankName?.val) {
-      finalBankName = statement.bankName;
-    }
-
-    Object.assign(statement, {
-      status: 'COMPLETED',
-      bankName: finalBankName,
-      currency: extraction.currency || 'INR',
-      creditLimit: extraction.creditLimit,
-      availableLimit: extraction.availableLimit,
-      outstandingTotal: extraction.outstandingTotal,
-      minPaymentDue: extraction.minPaymentDue,
-      paymentDueDate: extraction.paymentDueDate,
-      statementDate: extraction.statementDate,
-      statementPeriod: extraction.statementPeriod,
-      accountNumber: extraction.accountNumber,
-      accountHolder: extraction.accountHolder,
-      openingBalance: extraction.openingBalance,
-      closingBalance: extraction.closingBalance,
-      totalDeposits: extraction.totalDeposits,
-      totalWithdrawals: extraction.totalWithdrawals,
-      previousBalance: extraction.previousBalance,
-      lastPaymentAmount: extraction.lastPaymentAmount,
-      lastPaymentDate: extraction.lastPaymentDate,
-      totalDebits: extraction.totalDebits,
-      totalCredits: extraction.totalCredits,
-      totalInterestCharged: extraction.totalInterestCharged,
-      totalLateFee: extraction.totalLateFee,
-      totalForexFee: extraction.totalForexFee,
-      totalFees: extraction.totalFees,
-      cashAdvance: extraction.cashAdvance,
-      isRevolvingBalance: extraction.isRevolvingBalance,
-      rewardPointsEarned: extraction.rewardPointsEarned,
-      rewardPointsRedeemed: extraction.rewardPointsRedeemed,
-      rewardPointsBalance: extraction.rewardPointsBalance,
-      rewardPointsExpiry: extraction.rewardPointsExpiry,
-      transactions: extraction.transactions,
-      emiList: extraction.emiList,
-      reconciliationSummary: extraction.reconciliationSummary,
-      summary: extraction.summary,
-      isApproved: false // User must approve later
-    });
-
-    // Handle extraction specific fields for models
-    if (isBank) {
-      // Map deposit/withdrawal to amount/type for shared UI compatibility if possible,
-      // or preserve them as is. Let's keep them and UI will adapt.
-    }
-
-    let severity = 'unverified';
-    if (extraction.reconciliationSummary && Array.isArray(extraction.transactions)) {
-      const rec = isBank
-        ? reconcileBankStatement(extraction.reconciliationSummary, extraction.transactions)
-        : reconcileStatement(extraction.reconciliationSummary, extraction.transactions);
-
-      statement.reconciliation = { ...rec, checkedAt: new Date() };
-
-      if (rec.matched) {
-        severity = 'verified';
-      } else {
-        console.warn('[Validation] Reconciliation failed', {
-          statementId,
-          type: statement.type,
-          delta: rec.balanceDelta,
-          txCount: extraction.transactions.length
-        });
-
-        severity = rec.balanceDelta < 10 ? 'minor_mismatch' : 'extraction_error';
-      }
-    }
-
-    statement.extractionQuality = severity;
-
+    // 3. Map extraction to statement model using common utility
+    await mapAIResponseToStatement(statement, extraction);
     await statement.save();
+
     console.log(`[Background] Statement ${statementId} processed successfully.`);
+
+    return;
 
   } catch (error) {
     console.error(`[Background] Processing error for ${statementId}:`, error);
@@ -830,4 +732,104 @@ exports.processStatement = async (statementId, pdfBuffer) => {
       console.error('Final error update failed', e);
     }
   }
+};
+
+const mapAIResponseToStatement = async (statement, extraction) => {
+  const isBank = statement.type === 'BANK';
+  
+  // Apply Vendor Rules
+  const userRules = await VendorRule.find({ user: statement.user });
+  const rulesMap = new Map();
+  userRules.forEach(rule => rulesMap.set(rule.merchantName, rule.category));
+
+  if (extraction.transactions && Array.isArray(extraction.transactions)) {
+    extraction.transactions = extraction.transactions.map(tx => {
+      if (tx.merchantName && rulesMap.has(tx.merchantName)) {
+        return {
+          ...tx,
+          category: rulesMap.get(tx.merchantName),
+          categoryConfidence: 100
+        };
+      }
+      return tx;
+    });
+  }
+
+  // Detect bank name
+  let finalBankName = { val: 'Unknown Bank', box: [], page: 0 };
+  const rawBank = extraction.bankName;
+
+  if (typeof rawBank === 'object' && rawBank !== null) {
+    finalBankName = {
+      val: rawBank.val || 'Unknown Bank',
+      box: Array.isArray(rawBank.box) ? rawBank.box : [],
+      page: rawBank.page || 0
+    };
+  } else if (typeof rawBank === 'string') {
+    finalBankName.val = rawBank;
+  } else if (statement.bankName?.val) {
+    finalBankName = statement.bankName;
+  }
+
+  Object.assign(statement, {
+    status: 'COMPLETED',
+    bankName: finalBankName,
+    currency: extraction.currency || 'INR',
+    creditLimit: extraction.creditLimit,
+    availableLimit: extraction.availableLimit,
+    outstandingTotal: extraction.outstandingTotal,
+    minPaymentDue: extraction.minPaymentDue,
+    paymentDueDate: extraction.paymentDueDate,
+    statementDate: extraction.statementDate,
+    statementPeriod: extraction.statementPeriod,
+    accountNumber: extraction.accountNumber,
+    accountHolder: extraction.accountHolder,
+    openingBalance: extraction.openingBalance,
+    closingBalance: extraction.closingBalance,
+    totalDeposits: extraction.totalDeposits,
+    totalWithdrawals: extraction.totalWithdrawals,
+    previousBalance: extraction.previousBalance,
+    lastPaymentAmount: extraction.lastPaymentAmount,
+    lastPaymentDate: extraction.lastPaymentDate,
+    totalDebits: extraction.totalDebits,
+    totalCredits: extraction.totalCredits,
+    totalInterestCharged: extraction.totalInterestCharged,
+    totalLateFee: extraction.totalLateFee,
+    totalForexFee: extraction.totalForexFee,
+    totalFees: extraction.totalFees,
+    cashAdvance: extraction.cashAdvance,
+    isRevolvingBalance: extraction.isRevolvingBalance,
+    rewardPointsEarned: extraction.rewardPointsEarned,
+    rewardPointsRedeemed: extraction.rewardPointsRedeemed,
+    rewardPointsBalance: extraction.rewardPointsBalance,
+    rewardPointsExpiry: extraction.rewardPointsExpiry,
+    transactions: extraction.transactions,
+    emiList: extraction.emiList,
+    reconciliationSummary: extraction.reconciliationSummary,
+    summary: extraction.summary,
+    rawAIResponse: extraction
+  });
+
+  let severity = 'unverified';
+  if (extraction.reconciliationSummary && Array.isArray(extraction.transactions)) {
+    const rec = isBank
+      ? reconcileBankStatement(extraction.reconciliationSummary, extraction.transactions)
+      : reconcileStatement(extraction.reconciliationSummary, extraction.transactions);
+
+    statement.reconciliation = { ...rec, checkedAt: new Date() };
+
+    if (rec.matched) {
+      severity = 'verified';
+    } else {
+      severity = rec.balanceDelta < 10 ? 'minor_mismatch' : 'extraction_error';
+    }
+  }
+
+  statement.extractionQuality = severity;
+  return statement;
+};
+
+module.exports = {
+  processStatementInBackground,
+  mapAIResponseToStatement
 };

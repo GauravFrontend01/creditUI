@@ -49,6 +49,8 @@ const statementSchema = new mongoose.Schema({
   availableLimit:   statValSchema,
   outstandingTotal: statValSchema,
   minPaymentDue:    statValSchema,
+  openingBalance:   statValSchema,
+  closingBalance:   statValSchema,
 
   // ── Dates ─────────────────────────────────────────────────────────────────
   paymentDueDate:   { val: String, box: boxField, page: Number },

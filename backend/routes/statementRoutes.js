@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { createStatement, getMyStatements, getStatementById, deleteStatement, approveStatement, deleteManyStatements } = require('../controllers/statementController');
+const { createStatement, getMyStatements, getStatementById, deleteStatement, approveStatement, deleteManyStatements, reprocessStatement } = require('../controllers/statementController');
 const { protect } = require('../middleware/authMiddleware');
 
 // Store PDF in memory buffer (we stream it directly to Supabase)
@@ -24,5 +24,6 @@ router.get('/', protect, getMyStatements);
 router.get('/:id', protect, getStatementById);
 router.delete('/:id', protect, deleteStatement);
 router.post('/bulk-delete', protect, deleteManyStatements);
+router.post('/:id/reprocess', protect, reprocessStatement);
 
 module.exports = router;

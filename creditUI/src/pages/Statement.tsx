@@ -376,6 +376,7 @@ function Statement() {
   const [activeFooterFilter, setActiveFooterFilter] = useState<'debit' | 'credit' | 'fees' | null>(null)
   const [toast, setToast] = useState<{message: string, visible: boolean, type: 'success' | 'error'}>({ message: "", visible: false, type: 'success' })
   const [showMathDetails, setShowMathDetails] = useState(false);
+  const [reprocessing, setReprocessing] = useState(false);
 
   const { id } = useParams()
   const navigate = useNavigate()
@@ -553,6 +554,23 @@ function Statement() {
     handleCategoryUpdate,
     data?.type
   )
+
+  const handleReprocess = async () => {
+    if (!id) return;
+    try {
+      setReprocessing(true);
+      const res = await api.post(`/api/statements/${id}/reprocess`);
+      setData(res.data.statement);
+      setToast({ message: "Audit re-mapped successfully", visible: true, type: 'success' });
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+    } catch (error: any) {
+      console.error(error);
+      setToast({ message: error.response?.data?.message || "Failed to re-sync audit", visible: true, type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+    } finally {
+      setReprocessing(false);
+    }
+  };
 
   const table = useReactTable({
     data: data?.transactions ?? [],
@@ -800,14 +818,38 @@ function Statement() {
                )}
 
                {isSavedView && (
-                 <Button 
-                   variant="ghost" 
-                   size="sm" 
-                   onClick={() => setShowRawJson(true)}
-                   className="h-11 px-4 rounded-xl border border-slate-100/50 hover:bg-slate-50 transition-all font-mono text-[10px] font-bold text-slate-400 hover:text-slate-900 uppercase tracking-widest"
-                 >
-                   Raw Data
-                 </Button>
+                 <div className="flex gap-2">
+                   <Button 
+                     variant="ghost" 
+                     size="sm" 
+                     onClick={() => setShowRawJson(true)}
+                     className="h-11 px-4 rounded-xl border border-slate-100/50 hover:bg-slate-50 transition-all font-mono text-[10px] font-bold text-slate-400 hover:text-slate-900 uppercase tracking-widest"
+                   >
+                     Raw JSON
+                   </Button>
+                   <Button 
+                     variant="outline" 
+                     size="sm" 
+                     onClick={handleReprocess}
+                     disabled={reprocessing}
+                     className={cn(
+                       "h-11 px-4 rounded-xl border-dashed border-slate-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-all font-bold text-[10px] uppercase tracking-widest gap-2",
+                       reprocessing && "animate-pulse"
+                     )}
+                   >
+                     {reprocessing ? (
+                       <>
+                         <IconLoader2 size={14} className="animate-spin text-indigo-500" />
+                         Mapping...
+                       </>
+                     ) : (
+                       <>
+                         <IconMath size={14} />
+                         Re-Sync AI
+                       </>
+                     )}
+                   </Button>
+                 </div>
                )}
 
                {isSavedView && data.status === 'COMPLETED' && (

@@ -2,7 +2,7 @@ const Statement = require('../models/Statement');
 const VendorRule = require('../models/VendorRule');
 const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
-const { processStatement } = require('../services/backgroundProcessor');
+const { processStatementInBackground: processStatement, mapAIResponseToStatement } = require('../services/backgroundProcessor');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -94,6 +94,31 @@ exports.approveStatement = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Re-map existing AI response (Resync)
+// @route   POST /api/statements/:id/reprocess
+// @access  Private
+exports.reprocessStatement = async (req, res) => {
+  try {
+    const statement = await Statement.findById(req.params.id);
+
+    if (!statement || statement.user.toString() !== req.user._id.toString()) {
+      return res.status(404).json({ message: 'Statement not found' });
+    }
+
+    if (!statement.rawAIResponse) {
+      return res.status(400).json({ message: 'No AI response stored for this statement' });
+    }
+
+    await mapAIResponseToStatement(statement, statement.rawAIResponse);
+    await statement.save();
+
+    res.json({ message: 'Statement re-processed successfully', statement });
+  } catch (error) {
+    console.error('reprocessStatement error:', error);
+    res.status(500).json({ message: 'Server error', detail: error.message });
   }
 };
 
