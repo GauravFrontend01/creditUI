@@ -7,6 +7,9 @@ const transactionSchema = new mongoose.Schema({
   description: String,
   merchantName: String,
   amount: Number,
+  deposit: Number,
+  withdrawal: Number,
+  balance: Number,
   type: { type: String, enum: ['Credit', 'Debit'] },
   category: String,
   categoryConfidence: Number,
@@ -36,6 +39,9 @@ const statementSchema = new mongoose.Schema({
     ref: 'User',
   },
   bankName:         { val: { type: String, default: 'Unknown Bank' }, box: boxField, page: Number },
+  accountNumber:    { val: { type: String, default: '' }, box: boxField, page: Number },
+  accountHolder:    { val: { type: String, default: '' }, box: boxField, page: Number },
+  type:             { type: String, enum: ['CREDIT_CARD', 'BANK'], default: 'CREDIT_CARD' },
   currency:         { type: String, default: 'INR' },
 
   // ── Key Balances ──────────────────────────────────────────────────────────
@@ -57,6 +63,8 @@ const statementSchema = new mongoose.Schema({
   // ── Totals ─────────────────────────────────────────────────────────────────
   totalDebits:          statValSchema,
   totalCredits:         statValSchema,
+  totalDeposits:        statValSchema,
+  totalWithdrawals:     statValSchema,
   totalInterestCharged: statValSchema,
   totalLateFee:         statValSchema,
   totalForexFee:        statValSchema,
@@ -94,7 +102,11 @@ const statementSchema = new mongoose.Schema({
     expectedClosing: Number,
     extractedDebits: Number,
     extractedCredits: Number,
+    extractedDeposits: Number,
+    extractedWithdrawals: Number,
     transactionCount: Number,
+    continuityErrors: Number,
+    duplicateCount: Number,
     reasons: [String],
     checkedAt: Date
   },

@@ -28,13 +28,16 @@ interface Transaction {
   _id: string
   date: string
   description: string
-  merchantName: string
-  amount: number
+  merchantName?: string
+  amount?: number
+  deposit?: number
+  withdrawal?: number
+  balance?: number
   type: "Debit" | "Credit"
-  category: string
+  category?: string
   categoryConfidence?: number
-  isRecurring: boolean
-  isForex: boolean
+  isRecurring?: boolean
+  isForex?: boolean
   box: number[]
   page: number
 }
@@ -52,12 +55,18 @@ interface StatStr { val?: string; box?: number[]; page?: number }
 interface StatementData {
   _id: string
   bankName: StatStr
+  type?: 'CREDIT_CARD' | 'BANK'
   currency: string
   creditLimit?: StatVal
   availableLimit?: StatVal
   outstandingTotal?: StatVal
   minPaymentDue?: StatVal
   paymentDueDate?: StatStr
+  accountNumber?: StatStr
+  openingBalance?: StatVal
+  closingBalance?: StatVal
+  totalDeposits?: StatVal
+  totalWithdrawals?: StatVal
   statementDate?: StatStr
   statementPeriod?: { from?: string; to?: string }
   previousBalance?: StatVal
@@ -88,7 +97,11 @@ interface StatementData {
     expectedClosing: number;
     extractedDebits: number;
     extractedCredits: number;
+    extractedDeposits?: number;
+    extractedWithdrawals?: number;
     transactionCount: number;
+    continuityErrors?: number;
+    duplicateCount?: number;
     reasons?: string[];
     checkedAt: string;
   }
@@ -143,9 +156,12 @@ function SortHeader({ column, label }: { column: any; label: string }) {
 function buildColumns(
   sym: string,
   onRowClick: (tx: Transaction) => void,
-  onCategoryUpdate: (tx: Transaction, newCat: string) => void
+  onCategoryUpdate: (tx: Transaction, newCat: string) => void,
+  type: 'CREDIT_CARD' | 'BANK' = 'CREDIT_CARD'
 ): ColumnDef<Transaction>[] {
-  return [
+  const isBank = type === 'BANK';
+
+  const baseColumns: ColumnDef<Transaction>[] = [
     {
       accessorKey: 'date',
       header: ({ column }) => <SortHeader column={column} label="Date" />,
@@ -161,11 +177,13 @@ function buildColumns(
       cell: ({ row }) => {
         const tx = row.original
         return (
-          <div>
-            <p className="font-bold text-[13px] text-slate-800 truncate max-w-[260px]">
+          <div className="py-1">
+            <p className="font-bold text-[13px] text-slate-800 truncate max-w-[320px]">
               {tx.merchantName || tx.description}
             </p>
-            <p className="text-[10px] text-slate-400 truncate max-w-[260px]">{tx.description}</p>
+            {tx.merchantName && tx.merchantName !== tx.description && (
+              <p className="text-[10px] text-slate-400 truncate max-w-[320px] leading-tight">{tx.description}</p>
+            )}
           </div>
         )
       },
@@ -202,39 +220,79 @@ function buildColumns(
         )
       },
     },
-    {
-      accessorKey: 'type',
-      header: ({ column }) => <SortHeader column={column} label="Type" />,
-      cell: ({ row }) => (
-        <div className="flex items-center gap-1">
-          {row.original.type === 'Debit'
-            ? <IconTrendingDown size={13} className="text-red-400" />
-            : <IconTrendingUp size={13} className="text-emerald-500" />}
-          <span className={cn(
-            'text-[10px] font-bold',
-            row.original.type === 'Debit' ? 'text-red-500' : 'text-emerald-600'
-          )}>
-            {row.original.type}
-          </span>
-        </div>
-      ),
-    },
-    {
-      accessorKey: 'amount',
-      header: ({ column }) => <SortHeader column={column} label="Amount" />,
-      cell: ({ row }) => {
-        const tx = row.original
-        return (
-          <span className={cn(
-            'font-bold tabular-nums text-sm',
-            tx.type === 'Debit' ? 'text-slate-900' : 'text-emerald-600'
-          )}>
-            {tx.type === 'Debit' ? '-' : '+'}{fmt(tx.amount, sym)}
-          </span>
-        )
+  ];
+
+  if (!isBank) {
+    baseColumns.push(
+      {
+        accessorKey: 'type',
+        header: ({ column }) => <SortHeader column={column} label="Type" />,
+        cell: ({ row }) => (
+          <div className="flex items-center gap-1">
+            {row.original.type === 'Debit'
+              ? <IconTrendingDown size={13} className="text-red-400" />
+              : <IconTrendingUp size={13} className="text-emerald-500" />}
+            <span className={cn(
+              'text-[10px] font-bold',
+              row.original.type === 'Debit' ? 'text-red-500' : 'text-emerald-600'
+            )}>
+              {row.original.type}
+            </span>
+          </div>
+        ),
       },
-      sortingFn: (a, b) => a.original.amount - b.original.amount,
-    },
+      {
+        accessorKey: 'amount',
+        header: ({ column }) => <SortHeader column={column} label="Amount" />,
+        cell: ({ row }) => {
+          const tx = row.original
+          return (
+            <span className={cn(
+              'font-bold tabular-nums text-sm',
+              tx.type === 'Debit' ? 'text-slate-900' : 'text-emerald-600'
+            )}>
+              {tx.type === 'Debit' ? '-' : '+'}{fmt(tx.amount, sym)}
+            </span>
+          )
+        },
+        sortingFn: (a, b) => (a.original.amount || 0) - (b.original.amount || 0),
+      }
+    );
+  } else {
+    // Bank columns: Withdrawal, Deposit, Balance
+    baseColumns.push(
+      {
+        accessorKey: 'withdrawal',
+        header: ({ column }) => <SortHeader column={column} label="Withdrawal" />,
+        cell: ({ row }) => (
+          <span className="font-bold tabular-nums text-sm text-red-500">
+            {row.original.withdrawal ? fmt(row.original.withdrawal, sym) : '—'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'deposit',
+        header: ({ column }) => <SortHeader column={column} label="Deposit" />,
+        cell: ({ row }) => (
+          <span className="font-bold tabular-nums text-sm text-emerald-600">
+            {row.original.deposit ? fmt(row.original.deposit, sym) : '—'}
+          </span>
+        ),
+      },
+      {
+        accessorKey: 'balance',
+        header: ({ column }) => <SortHeader column={column} label="Balance" />,
+        cell: ({ row }) => (
+          <span className="font-bold tabular-nums text-sm text-slate-900">
+            {fmt(row.original.balance, sym)}
+          </span>
+        ),
+      }
+    );
+  }
+
+  // Add common end columns (flags, locate)
+  baseColumns.push(
     {
       id: 'flags',
       header: () => null,
@@ -254,22 +312,9 @@ function buildColumns(
       ),
       enableSorting: false,
     },
-    {
-      id: 'locate',
-      header: () => null,
-      cell: ({ row }) => (
-        row.original.box?.length > 0 ? (
-          <button
-            onClick={(e) => { e.stopPropagation(); onRowClick(row.original) }}
-            className="text-[9px] font-bold px-2 py-1 rounded border border-slate-200 text-slate-400 hover:border-primary hover:text-primary transition-all"
-          >
-            P{row.original.page}
-          </button>
-        ) : null
-      ),
-      enableSorting: false,
-    },
-  ]
+  );
+
+  return baseColumns;
 }
 
 // ── Stat Card ──────────────────────────────────────────────────────────────
@@ -502,7 +547,12 @@ function Statement() {
     }
   };
 
-  const txColumns = buildColumns(data?.currency ? getCurrencySymbol(data.currency) : '₹', handleTxRowClick, handleCategoryUpdate)
+  const txColumns = buildColumns(
+    data?.currency ? getCurrencySymbol(data.currency) : '₹', 
+    handleTxRowClick, 
+    handleCategoryUpdate,
+    data?.type
+  )
 
   const table = useReactTable({
     data: data?.transactions ?? [],
@@ -522,7 +572,7 @@ function Statement() {
         tx.merchantName?.toLowerCase().includes(q) ||
         tx.category?.toLowerCase().includes(q) ||
         tx.date?.toLowerCase().includes(q) ||
-        String(tx.amount).includes(q)
+        String(tx.amount || tx.deposit || tx.withdrawal || 0).includes(q)
       )
     },
     getCoreRowModel: getCoreRowModel(),
@@ -581,6 +631,8 @@ function Statement() {
 
   if (!data) return null
 
+  const isBank = data.type === 'BANK';
+
   if (data.status === 'PENDING' || data.status === 'PROCESSING') {
     return (
       <div className="flex flex-col items-center justify-center w-full h-screen bg-slate-50 gap-6">
@@ -609,11 +661,11 @@ function Statement() {
   // ROOT CAUSE FIX: Exclude merchant EMIs (mostly SBI Card "FP EMI") from sums to prevent double counting
   const txTotalDebits  = txs
     .filter(t => t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI'))
-    .reduce((s, t) => s + t.amount, 0)
-  const txTotalCredits = txs.filter(t => t.type === 'Credit').reduce((s, t) => s + t.amount, 0)
+    .reduce((s, t) => s + (t.amount || t.withdrawal || 0), 0)
+  const txTotalCredits = txs.filter(t => t.type === 'Credit').reduce((s, t) => s + (t.amount || t.deposit || 0), 0)
   const txTotalFees    = txs
     .filter(t => t.category === 'Fee' && t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI'))
-    .reduce((s, t) => s + t.amount, 0)
+    .reduce((s, t) => s + (t.amount || 0), 0)
 
 
   return (
@@ -714,14 +766,28 @@ function Statement() {
               </p>
             </div>
             <div className="flex items-center gap-8 flex-wrap">
-              <MetricCard label="Credit Limit" value={fmt(data.creditLimit?.val, sym)} />
-              <MetricCard
-                label="Outstanding"
-                value={fmt(data.outstandingTotal?.val, sym)}
-                color={utilPct >= 80 ? 'text-red-600' : 'text-slate-900'}
-                sub={`${utilPct}% utilized`}
-              />
-              <MetricCard label="Min Due" value={fmt(data.minPaymentDue?.val, sym)} color="text-amber-600" sub={data.paymentDueDate?.val} />
+              {!isBank ? (
+                <>
+                  <MetricCard label="Credit Limit" value={fmt(data.creditLimit?.val, sym)} />
+                  <MetricCard
+                    label="Outstanding"
+                    value={fmt(data.outstandingTotal?.val, sym)}
+                    color={utilPct >= 80 ? 'text-red-600' : 'text-slate-900'}
+                    sub={`${utilPct}% utilized`}
+                  />
+                  <MetricCard label="Min Due" value={fmt(data.minPaymentDue?.val, sym)} color="text-amber-600" sub={data.paymentDueDate?.val} />
+                </>
+              ) : (
+                <>
+                  <MetricCard label="Opening Balance" value={fmt(data.openingBalance?.val, sym)} />
+                  <MetricCard
+                    label="Closing Balance"
+                    value={fmt(data.closingBalance?.val, sym)}
+                    color="text-emerald-600"
+                  />
+                  <MetricCard label="A/C Number" value={data.accountNumber?.val || '—'} small />
+                </>
+              )}
             </div>
             <div className="flex items-center gap-4">
                {isSavedView && !data.isApproved && data.status === 'COMPLETED' && (
@@ -1030,7 +1096,7 @@ function Statement() {
             <div>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Financial Breakdown</p>
               <div className="grid grid-cols-2 gap-3">
-                {[
+                {!isBank ? [
                   { label: 'Previous Balance', value: fmt(data.previousBalance?.val, sym) },
                   { label: 'Last Payment', value: fmt(data.lastPaymentAmount?.val, sym), sub: data.lastPaymentDate?.val },
                   { label: 'Total Debits', value: fmt(data.totalDebits?.val, sym), color: 'text-red-600' },
@@ -1044,6 +1110,16 @@ function Statement() {
                     <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{item.label}</p>
                     <p className={cn('font-bold text-sm tabular-nums', item.color || 'text-slate-900')}>{item.value}</p>
                     {item.sub && <p className="text-[10px] text-slate-400">{item.sub}</p>}
+                  </div>
+                )) : [
+                  { label: 'Opening Balance', value: fmt(data.openingBalance?.val, sym) },
+                  { label: 'Total Deposits', value: fmt(data.totalDeposits?.val, sym), color: 'text-emerald-600' },
+                  { label: 'Total Withdrawals', value: fmt(data.totalWithdrawals?.val, sym), color: 'text-red-600' },
+                  { label: 'Closing Balance', value: fmt(data.closingBalance?.val, sym), color: 'text-slate-900' },
+                ].map((item, i) => (
+                  <div key={i} className="bg-white border border-slate-100 rounded-xl p-4 space-y-1">
+                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{item.label}</p>
+                    <p className={cn('font-bold text-sm tabular-nums', item.color || 'text-slate-900')}>{item.value}</p>
                   </div>
                 ))}
               </div>
@@ -1077,7 +1153,7 @@ function Statement() {
             {txs.length > 0 && (() => {
               const catMap: Record<string, number> = {}
               txs.filter(t => t.type === 'Debit').forEach(t => {
-                catMap[t.category || 'Other'] = (catMap[t.category || 'Other'] || 0) + t.amount
+                catMap[t.category || 'Other'] = (catMap[t.category || 'Other'] || 0) + (t.amount || t.withdrawal || 0)
               })
               const sorted = Object.entries(catMap).sort((a, b) => b[1] - a[1])
               const total = sorted.reduce((s, [, v]) => s + v, 0)
@@ -1136,8 +1212,9 @@ function Statement() {
       )}
       {/* Math Transparency Modal */}
       {showMathDetails && data?.reconciliation && (
-        <div className="fixed top-24 right-12 z-[2000] flex animate-in fade-in slide-in-from-right-8 duration-300 w-full max-w-[34rem]">
-          <div className="relative w-full bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-slate-200">
+        <div className="fixed inset-0 z-[2000] flex items-start justify-end p-12 pr-12 pt-24 animate-in fade-in duration-300">
+          <div className="absolute inset-0 bg-transparent" onClick={() => setShowMathDetails(false)} />
+          <div className="relative w-full max-w-[34rem] bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-slate-200 pointer-events-auto">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
                <div className="flex items-center gap-3">
                  <div className={cn("p-2 rounded-xl", 
@@ -1162,9 +1239,10 @@ function Statement() {
                  <div 
                    className="flex flex-col gap-1.5 cursor-pointer hover:bg-slate-100 p-2 rounded-xl border border-transparent hover:border-slate-200 transition-all active:scale-95 group"
                    onClick={() => {
-                     if (data.previousBalance?.box?.length && data.previousBalance.page) {
-                       setActiveBox({ box: data.previousBalance.box, page: data.previousBalance.page, id: 'previousBalance' })
-                       document.getElementById(`pdf-page-${data.previousBalance.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                     const field = isBank ? (data.openingBalance || data.reconciliationSummary?.openingBalance) : data.previousBalance;
+                     if (field?.box?.length && field.page) {
+                       setActiveBox({ box: field.box, page: field.page, id: 'opening' })
+                       document.getElementById(`pdf-page-${field.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
                      } else {
                        setToast({ message: "Bounding box not identified for Opening Balance", visible: true, type: 'error' });
                        setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
@@ -1178,18 +1256,22 @@ function Statement() {
                  
                  <div className="flex items-center justify-center text-slate-300"><IconPlus size={16} /></div>
                  
-                 <div className="flex flex-col gap-1.5 p-2 border border-dashed border-red-200 rounded-xl bg-red-50/50">
-                   <span className="text-[10px] font-bold text-red-400 uppercase tracking-widest bg-red-100/50 py-0.5 rounded text-[8px]">Calculated</span>
-                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Extracted<br/>Debits</span>
-                   <span className="text-sm font-black tabular-nums text-red-600">{fmt(data.reconciliation.extractedDebits || 0, sym)}</span>
+                 <div className="flex flex-col gap-1.5 p-2 border border-dashed border-sky-200 rounded-xl bg-sky-50/50">
+                   <span className="text-[10px] font-bold text-sky-400 uppercase tracking-widest bg-sky-100/50 py-0.5 rounded text-[8px]">Calculated</span>
+                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Extracted<br/>{isBank ? 'Deposits' : 'Debits'}</span>
+                   <span className={cn("text-sm font-black tabular-nums", isBank ? "text-emerald-600" : "text-red-600")}>
+                     {fmt(isBank ? (data.reconciliation.extractedDeposits || 0) : (data.reconciliation.extractedDebits || 0), sym)}
+                   </span>
                  </div>
                  
                  <div className="flex items-center justify-center text-slate-300"><IconMinus size={16} /></div>
                  
-                 <div className="flex flex-col gap-1.5 p-2 border border-dashed border-emerald-200 rounded-xl bg-emerald-50/50">
-                   <span className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest bg-emerald-100/50 py-0.5 rounded text-[8px]">Calculated</span>
-                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Extracted<br/>Credits</span>
-                   <span className="text-sm font-black tabular-nums text-emerald-600">{fmt(data.reconciliation.extractedCredits || 0, sym)}</span>
+                 <div className="flex flex-col gap-1.5 p-2 border border-dashed border-orange-200 rounded-xl bg-orange-50/50">
+                   <span className="text-[10px] font-bold text-orange-400 uppercase tracking-widest bg-orange-100/50 py-0.5 rounded text-[8px]">Calculated</span>
+                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Extracted<br/>{isBank ? 'Withdrawals' : 'Credits'}</span>
+                   <span className={cn("text-sm font-black tabular-nums", isBank ? "text-red-600" : "text-emerald-600")}>
+                     {fmt(isBank ? (data.reconciliation.extractedWithdrawals || 0) : (data.reconciliation.extractedCredits || 0), sym)}
+                   </span>
                  </div>
                </div>
 
@@ -1204,9 +1286,10 @@ function Statement() {
                  <div 
                    className="flex flex-col gap-1 text-right cursor-pointer hover:bg-slate-200/50 p-2 -my-2 -mr-2 rounded-xl transition-all active:scale-95"
                    onClick={() => {
-                     if (data.outstandingTotal?.box?.length && data.outstandingTotal.page) {
-                       setActiveBox({ box: data.outstandingTotal.box, page: data.outstandingTotal.page, id: 'outstandingTotal' })
-                       document.getElementById(`pdf-page-${data.outstandingTotal.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                     const field = isBank ? (data.closingBalance || data.outstandingTotal) : data.outstandingTotal;
+                     if (field?.box?.length && field.page) {
+                       setActiveBox({ box: field.box, page: field.page, id: 'closing' })
+                       document.getElementById(`pdf-page-${field.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
                      } else {
                        setToast({ message: "Bounding box not identified for Closing Balance", visible: true, type: 'error' });
                        setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
@@ -1215,7 +1298,7 @@ function Statement() {
                  >
                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0 bg-slate-200/50 px-2 py-0.5 rounded inline-flex self-end items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" /> Printed PDF Box</span>
                    <span className={cn("text-xl font-black tabular-nums",
-                      data.reconciliation.balanceDelta === 0 ? "text-emerald-500" :
+                      data.reconciliation.matched ? "text-emerald-500" :
                       data.reconciliation.balanceDelta < 10 ? "text-amber-500" : "text-red-500"
                    )}>
                      {fmt(data.reconciliation.expectedClosing || 0, sym)}
@@ -1224,14 +1307,14 @@ function Statement() {
                </div>
 
                <div className={cn("px-5 py-3 rounded-xl flex items-center justify-between border",
-                 data.reconciliation.balanceDelta === 0 ? "bg-emerald-50 border-emerald-100" :
+                 data.reconciliation.matched ? "bg-emerald-50 border-emerald-100" :
                  data.reconciliation.balanceDelta < 10 ? "bg-amber-50 border-amber-100" : "bg-red-50 border-red-100"
                )}>
                  <span className={cn("text-xs font-bold", 
-                   data.reconciliation.balanceDelta === 0 ? "text-emerald-800" :
+                   data.reconciliation.matched ? "text-emerald-800" :
                    data.reconciliation.balanceDelta < 10 ? "text-amber-800" : "text-red-800"
                  )}>
-                   {data.reconciliation.balanceDelta === 0 ? "Extraction mathematically flawless." : `Discrepancy of ${fmt(data.reconciliation.balanceDelta, sym)} detected.`}
+                   {data.reconciliation.matched ? "Extraction mathematically flawless." : `Discrepancy of ${fmt(data.reconciliation.balanceDelta, sym)} detected.`}
                  </span>
                  <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest bg-white/50 px-2 py-1 rounded-lg">
                    {data.reconciliation.transactionCount} Extracted

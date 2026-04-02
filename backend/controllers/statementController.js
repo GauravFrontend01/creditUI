@@ -18,6 +18,7 @@ exports.createStatement = async (req, res) => {
   try {
     const pdfFile = req.file;
     const pdfPassword = req.body.pdfPassword || '';
+    const statementType = req.body.statementType || 'CREDIT_CARD';
     
     if (!pdfFile) {
         return res.status(400).json({ message: 'No PDF file uploaded' });
@@ -56,6 +57,7 @@ exports.createStatement = async (req, res) => {
     const statement = await Statement.create({
       user: req.user._id,
       bankName: pdfFile.originalname.replace('.pdf', ''),
+      type: statementType,
       status: 'PENDING',
       pdfStorageUrl,
       pdfFileName,

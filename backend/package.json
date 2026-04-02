@@ -29,6 +29,11 @@
     "sharp": "^0.34.5",
     "tesseract.js": "^7.0.0"
   },
+  "nodemonConfig": {
+    "watch": ["*.js", "controllers/", "models/", "routes/", "services/"],
+    "ext": "js",
+    "ignore": ["*.test.js", "node_modules", "logs/*", "*.log"]
+  },
   "devDependencies": {
     "nodemon": "^3.1.14"
   }

@@ -26,8 +26,8 @@ const Upload = () => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isEncrypted, setIsEncrypted] = useState(false);
   const [password, setPassword] = useState('');
-  const [showSuccess, setShowSuccess] = useState(false);
   const [errorHeader, setErrorHeader] = useState("");
+  const [statementType, setStatementType] = useState<'CREDIT_CARD' | 'BANK'>('CREDIT_CARD');
   const navigate = useNavigate();
 
   const handleDrag = useCallback((e: React.DragEvent) => {
@@ -77,6 +77,7 @@ const Upload = () => {
 
     const formData = new FormData();
     formData.append('pdf', files[0]);
+    formData.append('statementType', statementType);
     if (password) formData.append('pdfPassword', password);
 
     try {
@@ -117,6 +118,32 @@ const Upload = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
         {/* Main Upload Section */}
         <div className="lg:col-span-7 space-y-8">
+          {/* Statement Type Toggle */}
+          <div className="bg-muted p-1 rounded-2xl flex items-center gap-1 w-fit">
+            <button
+              onClick={() => setStatementType('CREDIT_CARD')}
+              className={cn(
+                "px-6 py-2 rounded-xl text-xs font-bold transition-all",
+                statementType === 'CREDIT_CARD' 
+                  ? "bg-white text-primary shadow-sm" 
+                  : "text-muted-foreground hover:text-primary"
+              )}
+            >
+              Credit Card
+            </button>
+            <button
+              onClick={() => setStatementType('BANK')}
+              className={cn(
+                "px-6 py-2 rounded-xl text-xs font-bold transition-all",
+                statementType === 'BANK' 
+                  ? "bg-white text-primary shadow-sm" 
+                  : "text-muted-foreground hover:text-primary"
+              )}
+            >
+              Bank Account
+            </button>
+          </div>
+
           <div 
             className={cn(
               "relative group rounded-[2rem] p-12 transition-all duration-500 flex flex-col items-center justify-center min-h-[400px] text-center border-0",

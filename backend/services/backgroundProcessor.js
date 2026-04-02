@@ -97,6 +97,54 @@ Return ONLY valid JSON in this exact structure:
 }
 `;
 
+const bankPromptText = `Analyze this Bank Statement carefully. YOU MUST EXTRACT EVERY SINGLE TRANSACTION FROM EVERY SINGLE PAGE. DO NOT SKIP ANY DATA. 
+
+CRITICAL INSTRUCTIONS:
+1. You are a rigid JSON generation machine. 
+2. Output ONLY the raw JSON object. 
+3. Do NOT abbreviate, truncate, or skip any transactions.
+4. For bank statements, "Deposits" are Credits and "Withdrawals" are Debits.
+5. You MUST extract the "Balance" field for every single transaction row accurately.
+
+For every extracted field, provide bounding box coords in a flat array of exactly 4 numbers: [ymin, xmin, ymax, xmax] in normalized scale [0-1000] and the page number.
+
+Identify the primary currency used in the statement (e.g., INR, USD).
+
+Return ONLY valid JSON in this exact structure:
+{
+  "currency": string,
+  "bankName": { "val": string, "box": [number, number, number, number], "page": number },
+  "accountNumber": { "val": string, "box": [number, number, number, number], "page": number },
+  "accountHolder": { "val": string, "box": [number, number, number, number], "page": number },
+  "statementPeriod": { "from": string, "to": string, "box": [number, number, number, number], "page": number },
+
+  "openingBalance": { "val": number, "box": [number, number, number, number], "page": number },
+  "closingBalance": { "val": number, "box": [number, number, number, number], "page": number },
+  "totalDeposits": { "val": number, "box": [number, number, number, number], "page": number },
+  "totalWithdrawals": { "val": number, "box": [number, number, number, number], "page": number },
+
+  "transactions": [{
+    "date": string,
+    "description": "string (the FULL raw text)",
+    "deposit": number (0 if none),
+    "withdrawal": number (0 if none),
+    "balance": number (The running balance PRINTED on this exact row),
+    "type": "Credit" | "Debit",
+    "box": [number, number, number, number],
+    "page": number
+  }],
+
+  "reconciliationSummary": {
+    "openingBalance": { "type": "number", "description": "Balance before the first transaction in this PDF" },
+    "closingBalance": { "type": "number", "description": "Balance after the last transaction in this PDF" },
+    "totalDeposits": { "type": "number", "description": "Cumulative sum of all deposits across ALL pages. If the statement only provides page-wise totals, you MUST sum them yourself." },
+    "totalWithdrawals": { "type": "number", "description": "Cumulative sum of all withdrawals across ALL pages. If the statement only provides page-wise totals, you MUST sum them yourself." },
+    "transactionCount": { "type": "number", "description": "Total number of rows extracted" }
+  },
+  "summary": string
+}
+`;
+
 const extractionSchema = {
   description: "Credit card statement extraction schema",
   type: "object",
@@ -350,6 +398,186 @@ function round2(n) {
   return Math.round(n * 100) / 100;
 }
 
+const bankExtractionSchema = {
+  description: "Bank statement extraction schema",
+  type: "object",
+  properties: {
+    currency: { type: "string" },
+    bankName: {
+      type: "object",
+      properties: {
+        val: { type: "string" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      }
+    },
+    accountNumber: {
+      type: "object",
+      properties: {
+        val: { type: "string" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      }
+    },
+    openingBalance: {
+      type: "object",
+      properties: {
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      }
+    },
+    closingBalance: {
+      type: "object",
+      properties: {
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      }
+    },
+    totalDeposits: {
+      type: "object",
+      properties: {
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      }
+    },
+    totalWithdrawals: {
+      type: "object",
+      properties: {
+        val: { type: "number" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      }
+    },
+    statementPeriod: {
+      type: "object",
+      properties: {
+        from: { type: "string" },
+        to: { type: "string" },
+        box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+        page: { type: "number" }
+      }
+    },
+    transactions: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          date: { type: "string" },
+          description: { type: "string" },
+          deposit: { type: "number" },
+          withdrawal: { type: "number" },
+          balance: { type: "number" },
+          type: { type: "string", enum: ["Credit", "Debit"] },
+          box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+          page: { type: "number" }
+        }
+      }
+    },
+    reconciliationSummary: {
+      type: "object",
+      properties: {
+        openingBalance: { type: "number", description: "Balance before the first transaction in the statement" },
+        closingBalance: { type: "number", description: "Final balance after the last transaction in the statement" },
+        totalDeposits: { type: "number", description: "SUM of all deposits/credits across ALL pages. If the PDF only gives page-wise totals, SUM them yourself into this final total." },
+        totalWithdrawals: { type: "number", description: "SUM of all withdrawals/debits across ALL pages. If the PDF only gives page-wise totals, SUM them yourself into this final total." },
+        transactionCount: { type: "number", description: "Total count of transaction rows extracted" }
+      }
+    },
+    summary: { type: "string" }
+  },
+  required: ["bankName", "currency", "transactions", "reconciliationSummary"]
+};
+
+function reconcileBankStatement(summary, transactions) {
+  if (!summary) summary = {};
+  const {
+    openingBalance = 0,
+    closingBalance = 0,
+    totalDeposits = null,
+    totalWithdrawals = null,
+    transactionCount = 0
+  } = summary;
+
+  const reasons = [];
+  let matched = true;
+
+  // 1. Opening + Credits - Debits = Closing
+  const extractedDeposits = round2(transactions.reduce((sum, t) => sum + (t.deposit || 0), 0));
+  const extractedWithdrawals = round2(transactions.reduce((sum, t) => sum + (t.withdrawal || 0), 0));
+  const calculatedClosing = round2(openingBalance + extractedDeposits - extractedWithdrawals);
+  const balanceDelta = round2(Math.abs(calculatedClosing - closingBalance));
+
+  if (balanceDelta > 0.02) {
+    matched = false;
+    reasons.push(`Overall math mismatch: Expected closing ${closingBalance}, but calculated ${calculatedClosing} (Op: ${openingBalance} + Dep: ${extractedDeposits} - Wth: ${extractedWithdrawals})`);
+  }
+
+  // 2. Running Balance Continuity
+  let currentRunningBalance = openingBalance;
+  let continuityFails = 0;
+  for (let i = 0; i < transactions.length; i++) {
+    const t = transactions[i];
+    const expectedRowBalance = round2(currentRunningBalance + (t.deposit || 0) - (t.withdrawal || 0));
+    if (round2(Math.abs(expectedRowBalance - t.balance)) > 0.05) {
+      continuityFails++;
+      if (continuityFails <= 3) {
+        reasons.push(`Continuity fail at row ${i + 1}: Start ${currentRunningBalance} -> End ${t.balance} (Expected ${expectedRowBalance})`);
+      }
+    }
+    currentRunningBalance = t.balance; // Pivot to printed balance to prevent cascading errors for single misreads
+  }
+  if (continuityFails > 0) {
+    matched = false;
+    if (continuityFails > 3) reasons.push(`... and ${continuityFails - 3} more continuity errors.`);
+  }
+
+  // 3. Totals Check
+  if (totalDeposits !== null && Math.abs(extractedDeposits - totalDeposits) > 0.02) {
+    matched = false;
+    reasons.push(`Total Deposits mismatch: Extracted ${extractedDeposits}, Statement shows ${totalDeposits}`);
+  }
+  if (totalWithdrawals !== null && Math.abs(extractedWithdrawals - totalWithdrawals) > 0.02) {
+    matched = false;
+    reasons.push(`Total Withdrawals mismatch: Extracted ${extractedWithdrawals}, Statement shows ${totalWithdrawals}`);
+  }
+
+  // 4. Count Check
+  if (transactionCount > 0 && transactions.length !== transactionCount) {
+    matched = false;
+    reasons.push(`Count mismatch: Expected ${transactionCount} rows, extracted ${transactions.length}`);
+  }
+
+  // 5. Duplicates Check
+  const seen = new Set();
+  let duplicateCount = 0;
+  for (const t of transactions) {
+    const key = `${t.date}-${t.description}-${t.deposit}-${t.withdrawal}`;
+    if (seen.has(key)) {
+      duplicateCount++;
+    }
+    seen.add(key);
+  }
+  if (duplicateCount > 0) {
+    reasons.push(`Potential Duplicates: ${duplicateCount} rows look identical to others.`);
+  }
+
+  return {
+    matched,
+    balanceDelta,
+    extractedDeposits,
+    extractedWithdrawals,
+    calculatedClosing,
+    expectedClosing: closingBalance,
+    transactionCount: transactions.length,
+    continuityErrors: continuityFails,
+    duplicateCount,
+    reasons
+  };
+}
+
 function reconcileStatement(summary, transactions) {
   if (!summary) summary = {};
   const { openingBalance = 0, closingBalance = 0, totalDebits = null, totalCredits = null } = summary;
@@ -415,6 +643,9 @@ function reconcileStatement(summary, transactions) {
 }
 
 exports.processStatement = async (statementId, pdfBuffer) => {
+  // Wait a small bit to ensure the DB record is fully persisted if multiple processes are flickering
+  await new Promise(resolve => setTimeout(resolve, 500));
+
   try {
     const statement = await Statement.findById(statementId);
     if (!statement) return;
@@ -424,11 +655,15 @@ exports.processStatement = async (statementId, pdfBuffer) => {
     await statement.save();
 
     // 2. Call Gemini
+    const isBank = statement.type === 'BANK';
+    const activePrompt = isBank ? bankPromptText : promptText;
+    const activeSchema = isBank ? bankExtractionSchema : extractionSchema;
+
     const model = genAI.getGenerativeModel({
       model: "gemini-2.5-flash",
       generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: extractionSchema,
+        responseSchema: activeSchema,
       }
     });
 
@@ -440,9 +675,11 @@ exports.processStatement = async (statementId, pdfBuffer) => {
 
     while (attempt < maxAttempts) {
       try {
-        console.log(`[Background] Processing ${statementId} - Attempt ${attempt + 1}/${maxAttempts}...`);
+        console.log(`[Background] AI Extraction starting for ${statementId} (${statement.type})...`);
+        const startTime = Date.now();
+
         result = await model.generateContent([
-          promptText,
+          activePrompt,
           {
             inlineData: {
               data: pdfBuffer.toString("base64"),
@@ -452,6 +689,8 @@ exports.processStatement = async (statementId, pdfBuffer) => {
         ]);
 
         const response = await result.response;
+        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`[Background] AI Response received in ${duration}s for ${statementId}`);
         text = response.text();
 
         // Clean JSON markdown if any
@@ -519,6 +758,12 @@ exports.processStatement = async (statementId, pdfBuffer) => {
       paymentDueDate: extraction.paymentDueDate,
       statementDate: extraction.statementDate,
       statementPeriod: extraction.statementPeriod,
+      accountNumber: extraction.accountNumber,
+      accountHolder: extraction.accountHolder,
+      openingBalance: extraction.openingBalance,
+      closingBalance: extraction.closingBalance,
+      totalDeposits: extraction.totalDeposits,
+      totalWithdrawals: extraction.totalWithdrawals,
       previousBalance: extraction.previousBalance,
       lastPaymentAmount: extraction.lastPaymentAmount,
       lastPaymentDate: extraction.lastPaymentDate,
@@ -541,9 +786,18 @@ exports.processStatement = async (statementId, pdfBuffer) => {
       isApproved: false // User must approve later
     });
 
+    // Handle extraction specific fields for models
+    if (isBank) {
+      // Map deposit/withdrawal to amount/type for shared UI compatibility if possible,
+      // or preserve them as is. Let's keep them and UI will adapt.
+    }
+
     let severity = 'unverified';
     if (extraction.reconciliationSummary && Array.isArray(extraction.transactions)) {
-      const rec = reconcileStatement(extraction.reconciliationSummary, extraction.transactions);
+      const rec = isBank
+        ? reconcileBankStatement(extraction.reconciliationSummary, extraction.transactions)
+        : reconcileStatement(extraction.reconciliationSummary, extraction.transactions);
+
       statement.reconciliation = { ...rec, checkedAt: new Date() };
 
       if (rec.matched) {
@@ -551,9 +805,8 @@ exports.processStatement = async (statementId, pdfBuffer) => {
       } else {
         console.warn('[Validation] Reconciliation failed', {
           statementId,
+          type: statement.type,
           delta: rec.balanceDelta,
-          extractedDebits: rec.extractedDebits,
-          expectedDebits: extraction.reconciliationSummary.totalDebits,
           txCount: extraction.transactions.length
         });
 
