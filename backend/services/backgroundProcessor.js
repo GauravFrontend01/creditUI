@@ -1,9 +1,125 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const axios = require("axios");
+const FormData = require("form-data");
+const { fromBuffer } = require("pdf2pic");
+const fs = require("fs");
+const path = require("path");
 const Statement = require("../models/Statement");
 const VendorRule = require("../models/VendorRule");
 
 const API_KEY = process.env.GOOGLE_API_KEY || "";
 const genAI = new GoogleGenerativeAI(API_KEY);
+
+const { Mistral } = require('@mistralai/mistralai');
+const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
+
+const Groq = require('groq-sdk');
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+const { PDFDocument } = require('pdf-lib');
+
+const OCR_SPACE_API_KEY = process.env.OCR_SPACE_API_KEY || "K89900476788957";
+
+const processWithMistralOCR = async (pdfBuffer, originalFileName) => {
+    try {
+        console.log(`[Neural Flow] Initializing Mistral OCR pass for ${originalFileName}...`);
+        
+        // Mistral OCR prefers files under a certain size and page count
+        // We'll send the whole buffer for now but use the Blob + Signed URL strategy
+        const blob = new Blob([pdfBuffer], { type: 'application/pdf' });
+        const uploadedFile = await mistral.files.upload({
+            file: {
+                fileName: originalFileName || 'statement.pdf',
+                content: blob
+            },
+            purpose: 'ocr'
+        });
+
+        const signedUrl = await mistral.files.getSignedUrl({ fileId: uploadedFile.id });
+
+        const ocrResponse = await mistral.ocr.process({
+            model: "mistral-ocr-latest",
+            document: {
+                type: "document_url",
+                documentUrl: signedUrl.url
+            },
+            includeImageBase64: true,
+            table_format: 'html'
+        });
+
+        return {
+            type: 'MISTRAL_OCR_RAW',
+            data: ocrResponse,
+            fileId: uploadedFile.id
+        };
+    } catch (error) {
+        console.error('[Neural Flow] Mistral OCR failed:', error);
+        throw error;
+    }
+};
+
+const processWithGroq = async (ocrText, activePrompt) => {
+    try {
+        console.log(`[LLM Flow] Dispatching to Groq (Llama-3-70b-versatile)...`);
+        
+        const response = await groq.chat.completions.create({
+            messages: [
+                { role: "system", content: "You are a specialized financial auditor. Extract structured JSON as requested." },
+                { role: "user", content: `${activePrompt}\n\nRAW DATA:\n${ocrText}` }
+            ],
+            model: "llama-3.3-70b-versatile", // Using 3.3 as it is the most stable 70b on groq currently
+            response_format: { type: "json_object" }
+        });
+
+        return JSON.parse(response.choices[0].message.content);
+    } catch (error) {
+        console.error('[LLM Flow] Groq execution failed:', error);
+        throw error;
+    }
+};
+
+const processWithOCRSpace = async (pdfBuffer, activePrompt, activeSchema, engineVariant = "1") => {
+  try {
+    console.log(`[OCR.space Chain Environment] Sending PDF buffer (${Math.round(pdfBuffer.length / 1024)}KB) to OCR.space with Engine ${engineVariant}...`);
+    
+    const formData = new FormData();
+    formData.append("file", pdfBuffer, { filename: 'statement.pdf', contentType: 'application/pdf' });
+    formData.append("apikey", OCR_SPACE_API_KEY);
+    formData.append("language", "eng");
+    formData.append("isOverlayRequired", "true");
+    formData.append("isTable", "true");
+    formData.append("OCREngine", engineVariant);
+
+    const response = await axios.post("https://api.ocr.space/parse/image", formData, {
+      headers: { ...formData.getHeaders() },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity
+    });
+
+    if (response.data.IsErroredOnProcessing || response.data.OCRExitCode > 2) {
+      const errMsg = response.data.ErrorMessage || response.data.ErrorDetails || "Unknown OCR.space error";
+      throw new Error(`OCR.space API error: ${errMsg}`);
+    }
+
+    const parsedResults = response.data.ParsedResults;
+    if (!parsedResults || parsedResults.length === 0) {
+      throw new Error("OCR.space returned no parsed results.");
+    }
+
+    // Return data for all pages
+    return {
+      type: 'OCR_SPACE_RAW',
+      parsedResults: parsedResults.map(p => ({
+        overlay: p.TextOverlay,
+        text: p.ParsedText,
+        page: p.PageNumber || 1
+      }))
+    };
+  } catch (err) {
+    console.error("[OCR.space Chain] Processing error:", err.message);
+    throw err;
+  }
+};
 
 const promptText = `Analyze this credit card statement carefully. YOU MUST EXTRACT EVERY SINGLE TRANSACTION FROM EVERY SINGLE PAGE. DO NOT SKIP ANY DATA. 
 
@@ -135,11 +251,11 @@ Return ONLY valid JSON in this exact structure:
   }],
 
   "reconciliationSummary": {
-    "openingBalance": { "type": "number", "description": "Balance before the first transaction in this PDF" },
-    "closingBalance": { "type": "number", "description": "Balance after the last transaction in this PDF" },
-    "totalDeposits": { "type": "number", "description": "Cumulative sum of all deposits across ALL pages. If the statement only provides page-wise totals, you MUST sum them yourself." },
-    "totalWithdrawals": { "type": "number", "description": "Cumulative sum of all withdrawals across ALL pages. If the statement only provides page-wise totals, you MUST sum them yourself." },
-    "transactionCount": { "type": "number", "description": "Total number of rows extracted" }
+    "openingBalance": number,
+    "closingBalance": number,
+    "totalDeposits": number,
+    "totalWithdrawals": number,
+    "transactionCount": number
   },
   "summary": string
 }
@@ -654,64 +770,106 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
     statement.status = 'PROCESSING';
     await statement.save();
 
-    // 2. Call Gemini
+    // 2. Select Engine
     const isBank = statement.type === 'BANK';
     const activePrompt = isBank ? bankPromptText : promptText;
     const activeSchema = isBank ? bankExtractionSchema : extractionSchema;
+    const ocrEngine = statement.ocrEngine || 'gemini';
 
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: activeSchema,
-      }
-    });
-
-    let result = null;
-    let text = "";
     let extraction = null;
     let attempt = 0;
     const maxAttempts = 2;
 
-    while (attempt < maxAttempts) {
-      try {
-        console.log(`[Background] AI Extraction starting for ${statementId} (${statement.type})...`);
-        const startTime = Date.now();
+    if (ocrEngine.startsWith('ocr_space')) {
+      let variant = "1";
+      if (ocrEngine === 'ocr_space_v2') variant = "2";
+      if (ocrEngine === 'ocr_space_v3') variant = "3";
+      
+      console.log(`[Background] OCR.space Engine ${variant} process starting for ${statementId}...`);
+      extraction = await processWithOCRSpace(pdfBuffer, activePrompt, activeSchema, variant);
+      console.log(`[Background] OCR.space completed for ${statementId}`);
+    } else if (ocrEngine === 'ocr_mistral') {
+      console.log(`[Background] Mistral Neural OCR process starting for ${statementId}...`);
+      extraction = await processWithMistralOCR(pdfBuffer, `statement_${statementId}.pdf`);
+      console.log(`[Background] Mistral OCR completed for ${statementId}`);
+    } else if (ocrEngine === 'mistral_llama_hybrid') {
+      console.log(`[Hybrid Flow] Stage 1: Cropping to first page and sending to Mistral OCR...`);
+      
+      const pdfDoc = await PDFDocument.load(pdfBuffer);
+      const firstPageDoc = await PDFDocument.create();
+      const [firstPage] = await firstPageDoc.copyPages(pdfDoc, [0]);
+      firstPageDoc.addPage(firstPage);
+      const firstPageBuffer = Buffer.from(await firstPageDoc.save());
 
-        result = await model.generateContent([
-          activePrompt,
-          {
-            inlineData: {
-              data: pdfBuffer.toString("base64"),
-              mimeType: "application/pdf"
-            }
-          }
-        ]);
-
-        const response = await result.response;
-        const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-        console.log(`[Background] AI Response received in ${duration}s for ${statementId}`);
-        text = response.text();
-
-        // Clean JSON markdown if any
-        const cleanedText = text.replace(/```json/g, "").replace(/```/g, "").trim();
-        extraction = JSON.parse(cleanedText);
-
-        // Save raw AI response for debugging
-        statement.rawAIResponse = extraction;
-        await statement.save();
-
-        break; // Success! Break out of the retry loop.
-      } catch (err) {
-        attempt++;
-        console.error(`[Background] Attempt ${attempt} failed for ${statementId}:`, err.message);
-        if (attempt >= maxAttempts) {
-          throw new Error(`Failed after ${maxAttempts} attempts. Last error: ${err.message}`);
+      const mistralRaw = await processWithMistralOCR(firstPageBuffer, `statement_${statementId}.pdf`);
+      const allMarkdown = mistralRaw.data.pages.map(p => p.markdown).join('\n\n');
+      
+      console.log(`[Hybrid Flow] Stage 2: Mapping markdown to JSON via Groq (Llama 3)...`);
+      const llamaResult = await processWithGroq(allMarkdown, activePrompt);
+      
+      extraction = { ...llamaResult, type: 'MISTRAL_LLAMA_HYBRID_MAPPED', rawMistral: mistralRaw };
+      console.log(`[Hybrid Flow] Joint pipeline completed for ${statementId}`);
+    } else if (ocrEngine === 'groq_llama') {
+      console.log(`[Background] Groq LLM Chain process starting for ${statementId}...`);
+      // Groq needs text. We'll use OCR.space V2 as the high-accuracy text provider.
+      const rawTextData = await processWithOCRSpace(pdfBuffer, activePrompt, activeSchema, "2");
+      const allText = rawTextData.parsedResults.map(p => p.text).join('\n\n');
+      
+      const groqResult = await processWithGroq(allText, activePrompt);
+      extraction = { ...groqResult, type: 'GROQ_LLAMA_MAPPED' };
+      console.log(`[Background] Groq LLM completion successful for ${statementId}`);
+    } else {
+      const model = genAI.getGenerativeModel({
+        model: "gemini-2.0-flash", 
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: activeSchema,
         }
-        // Small delay before retrying
-        await new Promise(resolve => setTimeout(resolve, 2000));
+      });
+
+      while (attempt < maxAttempts) {
+        try {
+          console.log(`[Background] Gemini Extraction starting for ${statementId} (${statement.type})...`);
+          const startTime = Date.now();
+
+          const result = await model.generateContent([
+            activePrompt,
+            {
+              inlineData: {
+                data: pdfBuffer.toString("base64"),
+                mimeType: "application/pdf"
+              }
+            }
+          ]);
+
+          const response = await result.response;
+          const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+          console.log(`[Background] Gemini Response received in ${duration}s for ${statementId}`);
+          const text = response.text();
+
+          const cleanedText = text.replace(/```json/g, "").replace(/```/g, "").trim();
+          extraction = JSON.parse(cleanedText);
+          break;
+        } catch (err) {
+          attempt++;
+          console.error(`[Background] Gemini attempt ${attempt} failed for ${statementId}:`, err.message);
+          if (attempt >= maxAttempts) throw err;
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
       }
     }
+
+    // Save raw AI response for debugging
+    statement.rawAIResponse = extraction;
+    
+    if (extraction && extraction.type === 'OCR_SPACE_RAW') {
+      statement.status = 'COMPLETED';
+      await statement.save();
+      console.log(`[Background] Statement ${statementId} stored with RAW OCR data.`);
+      return;
+    }
+
+    await statement.save();
 
     // 3. Map extraction to statement model using common utility
     await mapAIResponseToStatement(statement, extraction);
@@ -736,7 +894,77 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
 
 const mapAIResponseToStatement = async (statement, extraction) => {
   const isBank = statement.type === 'BANK';
-  
+
+  // 1. If this is raw OCR.space data, perform the Gemini mapping step now
+  if (extraction && extraction.type === 'OCR_SPACE_RAW') {
+    console.log(`[Mapping] Performing on-the-fly Gemini mapping for raw OCR data...`);
+    const activePrompt = isBank ? bankPromptText : promptText;
+    const activeSchema = isBank ? bankExtractionSchema : extractionSchema;
+
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash", // Using standard 2.0 Flash for accurate mapping
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: activeSchema,
+      }
+    });
+
+    const allText = extraction.parsedResults.map(p => p.text).join('\n\n');
+    const allOverlay = extraction.parsedResults.map(p => p.overlay);
+    
+    const chainPrompt = `
+    You are an expert financial auditor receiving raw OCR output with coordinate data. 
+    Map this raw text to the specified JSON schema with extreme precision.
+    
+    ${activePrompt}
+    
+    RAW OCR EXTRACT:
+    ${allText}
+    
+    SPATIAL OVERLAY DATA:
+    ${JSON.stringify(allOverlay)}
+    `;
+
+    const result = await model.generateContent([chainPrompt]);
+    const geminiText = result.response.text();
+    extraction = JSON.parse(geminiText.replace(/```json/g, "").replace(/```/g, "").trim());
+    console.log(`[Mapping] Gemini mapping completed.`);
+  }
+
+  // 1b. If this is raw Mistral OCR data, perform the Gemini mapping
+  if (extraction && extraction.type === 'MISTRAL_OCR_RAW') {
+    console.log(`[Mapping] Performing Gemini mapping for Mistral Markdown data...`);
+    const activePrompt = isBank ? bankPromptText : promptText;
+    const activeSchema = isBank ? bankExtractionSchema : extractionSchema;
+
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash",
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: activeSchema,
+      }
+    });
+
+    const allMarkdown = extraction.data.pages.map(p => p.markdown).join('\n\n');
+    
+    const mappingPrompt = `
+    You are an expert financial auditor receiving Mistral multi-modal OCR output in Markdown.
+    Map this high-fidelity markdown to the specified JSON schema for our audit database.
+    
+    ${activePrompt}
+    
+    MISTRAL MARKDOWN:
+    ${allMarkdown}
+    `;
+
+    const result = await model.generateContent([mappingPrompt]);
+    const geminiText = result.response.text();
+    const mappedResult = JSON.parse(geminiText.replace(/```json/g, "").replace(/```/g, "").trim());
+    
+    // We keep the original rawAIResponse for debugging but update extraction for the DB merge
+    extraction = { ...mappedResult, type: 'MISTRAL_MAPPED' };
+  }
+
   // Apply Vendor Rules
   const userRules = await VendorRule.find({ user: statement.user });
   const rulesMap = new Map();

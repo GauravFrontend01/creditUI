@@ -8,6 +8,7 @@ const userRoutes = require('./routes/userRoutes');
 const statementRoutes = require('./routes/statementRoutes');
 const vendorRuleRoutes = require('./routes/vendorRuleRoutes');
 const ocrRoutes = require('./routes/ocrRoutes');
+const mistralRoutes = require('./routes/mistralRoutes');
 
 const app = express();
 
@@ -19,6 +20,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/statements', statementRoutes);
 app.use('/api/vendor-rules', vendorRuleRoutes);
 app.use('/api/ocr', ocrRoutes);
+app.use('/api/mistral', mistralRoutes);
 
 // Basic route
 app.get('/', (req, res) => {

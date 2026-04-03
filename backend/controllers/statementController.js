@@ -19,6 +19,7 @@ exports.createStatement = async (req, res) => {
     const pdfFile = req.file;
     const pdfPassword = req.body.pdfPassword || '';
     const statementType = req.body.statementType || 'CREDIT_CARD';
+    const ocrEngine = req.body.ocrEngine || 'gemini';
     
     if (!pdfFile) {
         return res.status(400).json({ message: 'No PDF file uploaded' });
@@ -59,6 +60,7 @@ exports.createStatement = async (req, res) => {
       bankName: pdfFile.originalname.replace('.pdf', ''),
       type: statementType,
       status: 'PENDING',
+      ocrEngine,
       pdfStorageUrl,
       pdfFileName,
       pdfPassword,
@@ -112,7 +114,17 @@ exports.reprocessStatement = async (req, res) => {
       return res.status(400).json({ message: 'No AI response stored for this statement' });
     }
 
-    await mapAIResponseToStatement(statement, statement.rawAIResponse);
+    if (req.body.targetType) {
+      statement.type = req.body.targetType;
+    }
+
+    if (req.body.manualExtraction) {
+      console.log(`[Injection] Manual extraction payload detected for ${req.params.id}`);
+      await mapAIResponseToStatement(statement, req.body.manualExtraction);
+    } else {
+      await mapAIResponseToStatement(statement, statement.rawAIResponse);
+    }
+    
     await statement.save();
 
     res.json({ message: 'Statement re-processed successfully', statement });

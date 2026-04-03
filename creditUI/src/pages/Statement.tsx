@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import api from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -6,7 +6,8 @@ import {
   IconDownload, IconArrowLeft, IconFileOff, IconLoader2,
   IconReceipt2, IconChartBar, IconCreditCard, IconCalendar,
   IconTrendingDown, IconTrendingUp, IconGift, IconShieldCheck, IconAlertTriangle, IconShieldX,
-  IconArrowUp, IconArrowDown, IconArrowsUpDown, IconCheck, IconX, IconEqual, IconPlus, IconMinus, IconMath
+  IconArrowUp, IconArrowDown, IconArrowsUpDown, IconCheck, IconX, IconEqual, IconPlus, IconMinus, IconMath,
+  IconTerminal2, IconPlayerPlay
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -87,6 +88,7 @@ interface StatementData {
   pdfPassword?: string
   status?: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED"
   isApproved?: boolean
+  ocrEngine?: 'gemini' | 'ocr_space' | 'ocr_space_v1' | 'ocr_space_v2' | 'ocr_space_v3'
   extractionQuality?: 'verified' | 'minor_mismatch' | 'extraction_error' | 'unverified'
   reconciliation?: {
     matched: boolean;
@@ -155,7 +157,6 @@ function SortHeader({ column, label }: { column: any; label: string }) {
 // ── Transaction Table Columns ──────────────────────────────────────────────
 function buildColumns(
   sym: string,
-  onRowClick: (tx: Transaction) => void,
   onCategoryUpdate: (tx: Transaction, newCat: string) => void,
   type: 'CREDIT_CARD' | 'BANK' = 'CREDIT_CARD'
 ): ColumnDef<Transaction>[] {
@@ -370,13 +371,16 @@ function Statement() {
   const [activeBox, setActiveBox] = useState<{ box: number[]; page: number; id: string } | null>(null)
   const [linePath, setLinePath] = useState("")
   const [isSavedView, setIsSavedView] = useState(false)
-  const [tab, setTab] = useState<'transactions' | 'emi' | 'overview'>('transactions')
+  const [tab, setTab] = useState<'transactions' | 'emi' | 'overview' | 'raw_ocr'>('transactions')
+  const [forensicType, setForensicType] = useState<'CREDIT_CARD' | 'BANK'>('CREDIT_CARD');
   const [txSorting, setTxSorting] = useState<SortingState>([])
   const [txGlobalFilter, setTxGlobalFilter] = useState("")
   const [activeFooterFilter, setActiveFooterFilter] = useState<'debit' | 'credit' | 'fees' | null>(null)
   const [toast, setToast] = useState<{message: string, visible: boolean, type: 'success' | 'error'}>({ message: "", visible: false, type: 'success' })
   const [showMathDetails, setShowMathDetails] = useState(false);
   const [reprocessing, setReprocessing] = useState(false);
+  const [showVault, setShowVault] = useState(false);
+  const [injectedJson, setInjectedJson] = useState('');
 
   const { id } = useParams()
   const navigate = useNavigate()
@@ -395,6 +399,16 @@ function Statement() {
         try {
           const { data } = await api.get(`/api/statements/${id}`)
           setData(data)
+          if (data.type) setForensicType(data.type);
+
+          if (data.rawAIResponse) {
+            console.log("[Neural Core] Raw AI Extraction Response:", data.rawAIResponse);
+          }
+          
+          if (data.rawAIResponse?.type === 'OCR_SPACE_RAW' && (!data.transactions || data.transactions.length === 0)) {
+            setTab('raw_ocr')
+          }
+          
           if (data.pdfStorageUrl && pages.length === 0) loadPdfFromUrl(data.pdfStorageUrl, data.pdfPassword)
           
           // If still processing, setup polling
@@ -550,7 +564,6 @@ function Statement() {
 
   const txColumns = buildColumns(
     data?.currency ? getCurrencySymbol(data.currency) : '₹', 
-    handleTxRowClick, 
     handleCategoryUpdate,
     data?.type
   )
@@ -559,13 +572,33 @@ function Statement() {
     if (!id) return;
     try {
       setReprocessing(true);
-      const res = await api.post(`/api/statements/${id}/reprocess`);
+      const res = await api.post(`/api/statements/${id}/reprocess`, { targetType: forensicType });
       setData(res.data.statement);
       setToast({ message: "Audit re-mapped successfully", visible: true, type: 'success' });
       setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
     } catch (error: any) {
       console.error(error);
       setToast({ message: error.response?.data?.message || "Failed to re-sync audit", visible: true, type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+    } finally {
+      setReprocessing(false);
+    }
+  };
+  
+  const handleInjection = async () => {
+    if (!id || !injectedJson) return;
+    try {
+      setReprocessing(true);
+      const parsed = JSON.parse(injectedJson);
+      const res = await api.post(`/api/statements/${id}/reprocess`, { manualExtraction: parsed });
+      setData(res.data.statement);
+      setShowVault(false);
+      setInjectedJson('');
+      setToast({ message: "Cyber Injection Successful", visible: true, type: 'success' });
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+    } catch (e: any) {
+      console.error(e);
+      setToast({ message: "Invalid JSON Payload", visible: true, type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
     } finally {
       setReprocessing(false);
@@ -744,26 +777,52 @@ function Statement() {
                 <div className="h-8 w-8 border-2 border-primary/20 border-t-primary animate-spin rounded-full" />
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Rendering...</p>
               </div>
-            ) : pages.map((img, i) => (
-              <div key={i} id={`pdf-page-${i + 1}`} className="relative shadow-sm border bg-white w-full">
-                <img src={img} className="w-full h-auto block" alt={`Page ${i + 1}`} />
-                {activeBox?.page === i + 1 && (
-                  <div
-                    id="pdf-highlight"
-                    className="absolute ring-2 ring-amber-500 bg-yellow-400/25 animate-pulse"
-                    style={{
-                      top: `${(activeBox.box[0] / 1000) * 100}%`,
-                      left: `${(activeBox.box[1] / 1000) * 100}%`,
-                      height: `${((activeBox.box[2] - activeBox.box[0]) / 1000) * 100}%`,
-                      width: `${((activeBox.box[3] - activeBox.box[1]) / 1000) * 100}%`,
-                    }}
-                  />
-                )}
-                <span className="absolute top-2 right-2 bg-black/10 text-[9px] font-bold text-slate-600 px-2 py-0.5 rounded">
-                  PG {i + 1}
-                </span>
-              </div>
-            ))}
+            ) : pages.map((img, i) => {
+              const pageNum = i + 1;
+              const rawOcr = data.rawAIResponse?.type === 'OCR_SPACE_RAW' 
+                ? data.rawAIResponse.parsedResults?.find((p: any) => p.page === pageNum)
+                : null;
+
+              return (
+                <div key={i} id={`pdf-page-${pageNum}`} className="relative shadow-sm border bg-white w-full">
+                  <img src={img} className="w-full h-auto block" alt={`Page ${pageNum}`} />
+                  
+                  {/* OCR.space Raw Highlights */}
+                  {rawOcr && rawOcr.overlay?.Lines?.map((line: any, li: number) => (
+                    line.Words?.map((word: any, wi: number) => (
+                      <div
+                        key={`ocr-${li}-${wi}`}
+                        className="absolute bg-yellow-400/30 hover:bg-yellow-400/60 transition-colors cursor-help border border-yellow-500/20"
+                        title={word.WordText}
+                        style={{
+                          // Heuristic for image dimensions if not explicitly provided by the engine
+                          top: `${(word.Top / (rawOcr.overlay.ImageHeight || word.ImageHeight || 2048)) * 100}%`,
+                          left: `${(word.Left / (rawOcr.overlay.ImageWidth || word.ImageWidth || 2048)) * 100}%`,
+                          width: `${(word.Width / (rawOcr.overlay.ImageWidth || word.ImageWidth || 2048)) * 100}%`,
+                          height: `${(word.Height / (rawOcr.overlay.ImageHeight || word.ImageHeight || 2048)) * 100}%`,
+                        }}
+                      />
+                    ))
+                  ))}
+
+                  {activeBox?.page === pageNum && (
+                    <div
+                      id="pdf-highlight"
+                      className="absolute ring-2 ring-amber-500 bg-yellow-400/25 animate-pulse z-10"
+                      style={{
+                        top: `${(activeBox.box[0] / 1000) * 100}%`,
+                        left: `${(activeBox.box[1] / 1000) * 100}%`,
+                        height: `${((activeBox.box[2] - activeBox.box[0]) / 1000) * 100}%`,
+                        width: `${((activeBox.box[3] - activeBox.box[1]) / 1000) * 100}%`,
+                      }}
+                    />
+                  )}
+                  <span className="absolute top-2 right-2 bg-black/10 text-[9px] font-bold text-slate-600 px-2 py-0.5 rounded z-20">
+                    PG {pageNum}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -774,11 +833,19 @@ function Statement() {
         {/* Stat bar */}
         <div className="shrink-0 px-6 py-4 border-b bg-white">
           <div className="flex items-start justify-between gap-6 flex-wrap">
-            <div>
-              <h2 className="text-lg font-black text-slate-900 tracking-tight">
-                {typeof data.bankName === 'object' ? data.bankName?.val : data.bankName}
-              </h2>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-3">
+                <h2 className="text-lg font-black text-slate-900 tracking-tight">
+                  {typeof data.bankName === 'object' ? data.bankName?.val : data.bankName}
+                </h2>
+                <span className="text-[9px] font-black uppercase tracking-[0.15em] bg-primary/5 text-primary px-2 py-0.5 rounded border border-primary/10">
+                  {data.ocrEngine === 'ocr_space' ? 'OCR.space v1' : 
+                   data.ocrEngine === 'ocr_space_v1' ? 'OCR.space v1' :
+                   data.ocrEngine === 'ocr_space_v2' ? 'OCR.space v2' :
+                   data.ocrEngine === 'ocr_space_v3' ? 'OCR.space v3' : 'Gemini Native'}
+                </span>
+              </div>
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
                 {data.statementDate?.val && `Statement: ${data.statementDate.val}`}
                 {data.paymentDueDate?.val && ` · Due: ${data.paymentDueDate.val}`}
               </p>
@@ -913,6 +980,9 @@ function Statement() {
           <TabBtn active={tab === 'transactions'} onClick={() => setTab('transactions')} icon={IconReceipt2} label="Transactions" count={txs.length} />
           {emis.length > 0 && (
             <TabBtn active={tab === 'emi'} onClick={() => setTab('emi')} icon={IconCalendar} label="EMI Active" count={emis.length} />
+          )}
+          {data.rawAIResponse?.type === 'OCR_SPACE_RAW' && (
+            <TabBtn active={tab === 'raw_ocr' as any} onClick={() => setTab('raw_ocr' as any)} icon={IconReceipt2} label="Raw OCR" />
           )}
           <TabBtn active={tab === 'overview'} onClick={() => setTab('overview')} icon={IconChartBar} label="Overview" />
         </div>
@@ -1080,6 +1150,118 @@ function Statement() {
         )}
 
         {/* ── Tab: EMI ── */}
+        {/* ── Tab: Raw OCR ── */}
+        {tab === 'raw_ocr' as any && (
+          <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 p-6">
+            <div className="bg-white rounded-2xl border p-6 shadow-sm overflow-y-auto flex-1">
+                <div className="flex items-center justify-between mb-6 sticky top-0 bg-white pb-4 z-10 border-b border-slate-50">
+                    <div className="space-y-1">
+                      <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Forensic OCR Extraction</h3>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Bypassed Gemini mapping. Viewing raw spatial text.</p>
+                    </div>
+                    
+                    <div className="flex bg-slate-100 p-1 rounded-xl gap-1 border border-slate-200/50">
+                        <button
+                            onClick={() => setForensicType('CREDIT_CARD')}
+                            className={cn(
+                              "px-5 py-1.5 rounded-lg text-[10px] font-black tracking-widest transition-all uppercase", 
+                              forensicType === 'CREDIT_CARD' ? "bg-white shadow-sm text-slate-900" : "text-slate-400 hover:text-slate-600"
+                            )}
+                        >
+                            Credit Card
+                        </button>
+                        <button
+                            onClick={() => setForensicType('BANK')}
+                            className={cn(
+                              "px-5 py-1.5 rounded-lg text-[10px] font-black tracking-widest transition-all uppercase", 
+                              forensicType === 'BANK' ? "bg-white shadow-sm text-slate-900" : "text-slate-400 hover:text-slate-600"
+                            )}
+                        >
+                            Bank Account
+                        </button>
+                    </div>
+                    <Button 
+                        size="sm" 
+                        variant="default" 
+                        onClick={handleReprocess}
+                        disabled={reprocessing}
+                        className="gap-2 h-10 px-6 rounded-xl font-bold text-[10px] uppercase tracking-widest bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-200"
+                    >
+                        {reprocessing ? <IconLoader2 size={14} className="animate-spin" /> : <IconMath size={14} />}
+                        Run Gemini Audit
+                    </Button>
+                </div>
+                
+                <div className="space-y-8 mt-4">
+                    {data.rawAIResponse?.parsedResults?.map((page: any, pi: number) => (
+                        <div key={pi} className="space-y-3">
+                            <div className="flex items-center gap-3">
+                                <span className="text-[10px] font-black bg-slate-900 text-white px-3 py-1 rounded-full">PAGE {page.page}</span>
+                                <div className="h-px flex-1 bg-slate-100" />
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{page.text?.length || 0} characters</span>
+                            </div>
+                            <div className="relative group">
+                              <pre className="text-[12px] font-mono text-slate-600 bg-slate-50/50 p-6 rounded-2xl border border-slate-100 overflow-x-auto whitespace-pre-wrap leading-relaxed font-medium">
+                                  {page.text}
+                              </pre>
+                              <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button size="icon" variant="ghost" className="h-8 w-8 bg-white/80 backdrop-blur" onClick={() => navigator.clipboard.writeText(page.text)}>
+                                  <IconDownload size={14} className="text-slate-400" />
+                                </Button>
+                              </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="mt-12 pt-12 border-t border-slate-100 space-y-6">
+                    <div className="flex items-center justify-between">
+                        <div className="space-y-1">
+                            <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Neural Injection Vault</h4>
+                            <p className="text-[9px] font-bold text-slate-300 uppercase tracking-widest leading-none">Bypass AI logic with manual JSON data stream</p>
+                        </div>
+                        <Button 
+                            size="sm" 
+                            variant="ghost" 
+                            onClick={() => setShowVault(!showVault)}
+                            className={cn(
+                                "h-9 px-4 rounded-xl font-bold text-[10px] uppercase tracking-widest transition-all",
+                                showVault ? "bg-red-50 text-red-500 hover:bg-red-100" : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+                            )}
+                        >
+                            <IconTerminal2 size={14} className="mr-2" />
+                            {showVault ? 'Seal Vault' : 'Access Vault'}
+                        </Button>
+                    </div>
+
+                    {showVault && (
+                        <div className="space-y-4 animate-in slide-in-from-top-4 duration-500">
+                            <div className="relative group">
+                                <textarea 
+                                    className="w-full h-80 font-mono text-[11px] p-6 bg-slate-900 text-emerald-400 border border-slate-800 rounded-3xl shadow-2xl focus-visible:outline-none focus:ring-2 focus:ring-emerald-500/20 leading-relaxed scrollbar-hide"
+                                    placeholder='{ "transactions": [...], "reconciliationSummary": {...} }'
+                                    value={injectedJson}
+                                    onChange={(e) => setInjectedJson(e.target.value)}
+                                />
+                                <div className="absolute top-4 right-4 flex items-center gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                                    <div className="text-[9px] font-black uppercase text-emerald-500 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20 backdrop-blur-md">manual/injection-v1</div>
+                                </div>
+                            </div>
+                            <Button 
+                                onClick={handleInjection}
+                                disabled={reprocessing || !injectedJson}
+                                className="w-full h-14 rounded-2xl font-black text-[11px] uppercase tracking-[0.2em] bg-emerald-600 hover:bg-emerald-700 shadow-xl shadow-emerald-200/50 gap-3 group transition-all active:scale-[0.99]"
+                            >
+                                {reprocessing ? <IconLoader2 size={18} className="animate-spin" /> : <IconPlayerPlay size={18} className="group-hover:translate-x-1 transition-transform" />}
+                                Overwrite Neural State
+                            </Button>
+                        </div>
+                    )}
+                </div>
+            </div>
+          </div>
+        )}
+
         {tab === 'emi' && (
           <div className="flex-1 overflow-y-auto p-6 space-y-4">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Active EMI Plans</p>

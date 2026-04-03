@@ -9,6 +9,7 @@ import TesseractOCR from "@/pages/TesseractOCR"
 import Upload from "@/pages/Upload"
 import Dummy from "@/pages/Dummy"
 import GLMOCR from "@/pages/GLMOCR"
+import MistralOCR from "@/pages/MistralOCR"
 import { AuthProvider } from "@/context/AuthContext"
 import { ProtectedRoute } from "@/components/ProtectedRoute"
 import { Toaster } from "sonner"
@@ -35,6 +36,7 @@ export function App() {
                      <Route path="/upload" element={<Upload />} />
                      <Route path="/dummy" element={<Dummy />} />
                      <Route path="/glm-ocr" element={<GLMOCR />} />
+                      <Route path="/mistral-ocr" element={<MistralOCR />} />
                    </Routes>
                 </DashboardLayout>
               </ProtectedRoute>

@@ -28,6 +28,7 @@ const Upload = () => {
   const [password, setPassword] = useState('');
   const [errorHeader, setErrorHeader] = useState("");
   const [statementType, setStatementType] = useState<'CREDIT_CARD' | 'BANK'>('CREDIT_CARD');
+  const [ocrEngine, setOcrEngine] = useState<'gemini' | 'ocr_space' | 'ocr_space_v1' | 'ocr_space_v2' | 'ocr_space_v3' | 'ocr_mistral' | 'groq_llama' | 'mistral_llama_hybrid'>('gemini');
   const navigate = useNavigate();
 
   const handleDrag = useCallback((e: React.DragEvent) => {
@@ -78,6 +79,7 @@ const Upload = () => {
     const formData = new FormData();
     formData.append('pdf', files[0]);
     formData.append('statementType', statementType);
+    formData.append('ocrEngine', ocrEngine);
     if (password) formData.append('pdfPassword', password);
 
     try {
@@ -118,30 +120,95 @@ const Upload = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
         {/* Main Upload Section */}
         <div className="lg:col-span-7 space-y-8">
-          {/* Statement Type Toggle */}
-          <div className="bg-muted p-1 rounded-2xl flex items-center gap-1 w-fit">
-            <button
-              onClick={() => setStatementType('CREDIT_CARD')}
-              className={cn(
-                "px-6 py-2 rounded-xl text-xs font-bold transition-all",
-                statementType === 'CREDIT_CARD' 
-                  ? "bg-white text-primary shadow-sm" 
-                  : "text-muted-foreground hover:text-primary"
-              )}
-            >
-              Credit Card
-            </button>
-            <button
-              onClick={() => setStatementType('BANK')}
-              className={cn(
-                "px-6 py-2 rounded-xl text-xs font-bold transition-all",
-                statementType === 'BANK' 
-                  ? "bg-white text-primary shadow-sm" 
-                  : "text-muted-foreground hover:text-primary"
-              )}
-            >
-              Bank Account
-            </button>
+          <div className="flex items-center gap-8">
+            <div className="flex flex-col gap-2">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest pl-2">Statement Class</span>
+              <div className="bg-muted p-1 rounded-2xl flex items-center gap-1 w-fit">
+                <button
+                  onClick={() => setStatementType('CREDIT_CARD')}
+                  className={cn(
+                    "px-6 py-2 rounded-xl text-xs font-bold transition-all",
+                    statementType === 'CREDIT_CARD' 
+                      ? "bg-white text-primary shadow-sm" 
+                      : "text-muted-foreground hover:text-primary"
+                  )}
+                >
+                  Credit Card
+                </button>
+                <button
+                  onClick={() => setStatementType('BANK')}
+                  className={cn(
+                    "px-6 py-2 rounded-xl text-xs font-bold transition-all",
+                    statementType === 'BANK' 
+                      ? "bg-white text-primary shadow-sm" 
+                      : "text-muted-foreground hover:text-primary"
+                  )}
+                >
+                  Bank Account
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest pl-2">Neural Architecture</span>
+              <div className="bg-muted p-1 rounded-2xl flex items-center gap-1 w-fit border border-primary/5">
+                <button
+                  onClick={() => setOcrEngine('gemini')}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-[10px] font-bold transition-all",
+                    ocrEngine === 'gemini' 
+                      ? "bg-white text-primary shadow-sm" 
+                      : "text-muted-foreground hover:text-primary"
+                  )}
+                >
+                  Gemini
+                </button>
+                <button
+                  onClick={() => setOcrEngine('ocr_space_v1')}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-[10px] font-bold transition-all",
+                    (ocrEngine === 'ocr_space_v1' || ocrEngine === 'ocr_space')
+                      ? "bg-white text-primary shadow-sm" 
+                      : "text-muted-foreground hover:text-primary"
+                  )}
+                >
+                  OCR v1
+                </button>
+                <button
+                  onClick={() => setOcrEngine('ocr_space_v3')}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-[10px] font-bold transition-all",
+                    ocrEngine === 'ocr_space_v3' 
+                      ? "bg-white text-primary shadow-sm" 
+                      : "text-muted-foreground hover:text-primary"
+                  )}
+                >
+                  OCR v3
+                </button>
+                <button
+                  onClick={() => setOcrEngine('groq_llama')}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-[10px] font-bold transition-all",
+                    ocrEngine === 'groq_llama' 
+                      ? "bg-white text-primary shadow-sm" 
+                      : "text-muted-foreground hover:text-primary"
+                  )}
+                >
+                  Groq 70B
+                </button>
+                <button
+                  onClick={() => setOcrEngine('mistral_llama_hybrid')}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-[10px] font-bold transition-all",
+                    ocrEngine === 'mistral_llama_hybrid' 
+                      ? "bg-white text-primary shadow-sm" 
+                      : "text-muted-foreground hover:text-primary"
+                  )}
+                >
+                  Mistral + Llama
+                </button>
+              </div>
+            </div>
           </div>
 
           <div 
