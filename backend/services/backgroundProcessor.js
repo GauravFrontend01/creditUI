@@ -21,67 +21,67 @@ const { PDFDocument } = require('pdf-lib');
 const OCR_SPACE_API_KEY = process.env.OCR_SPACE_API_KEY || "K89900476788957";
 
 const processWithMistralOCR = async (pdfBuffer, originalFileName) => {
-    try {
-        console.log(`[Neural Flow] Initializing Mistral OCR pass for ${originalFileName}...`);
-        
-        // Mistral OCR prefers files under a certain size and page count
-        // We'll send the whole buffer for now but use the Blob + Signed URL strategy
-        const blob = new Blob([pdfBuffer], { type: 'application/pdf' });
-        const uploadedFile = await mistral.files.upload({
-            file: {
-                fileName: originalFileName || 'statement.pdf',
-                content: blob
-            },
-            purpose: 'ocr'
-        });
+  try {
+    console.log(`[Neural Flow] Initializing Mistral OCR pass for ${originalFileName}...`);
 
-        const signedUrl = await mistral.files.getSignedUrl({ fileId: uploadedFile.id });
+    // Mistral OCR prefers files under a certain size and page count
+    // We'll send the whole buffer for now but use the Blob + Signed URL strategy
+    const blob = new Blob([pdfBuffer], { type: 'application/pdf' });
+    const uploadedFile = await mistral.files.upload({
+      file: {
+        fileName: originalFileName || 'statement.pdf',
+        content: blob
+      },
+      purpose: 'ocr'
+    });
 
-        const ocrResponse = await mistral.ocr.process({
-            model: "mistral-ocr-latest",
-            document: {
-                type: "document_url",
-                documentUrl: signedUrl.url
-            },
-            includeImageBase64: true,
-            table_format: 'html'
-        });
+    const signedUrl = await mistral.files.getSignedUrl({ fileId: uploadedFile.id });
 
-        return {
-            type: 'MISTRAL_OCR_RAW',
-            data: ocrResponse,
-            fileId: uploadedFile.id
-        };
-    } catch (error) {
-        console.error('[Neural Flow] Mistral OCR failed:', error);
-        throw error;
-    }
+    const ocrResponse = await mistral.ocr.process({
+      model: "mistral-ocr-latest",
+      document: {
+        type: "document_url",
+        documentUrl: signedUrl.url
+      },
+      includeImageBase64: true,
+      table_format: 'html'
+    });
+
+    return {
+      type: 'MISTRAL_OCR_RAW',
+      data: ocrResponse,
+      fileId: uploadedFile.id
+    };
+  } catch (error) {
+    console.error('[Neural Flow] Mistral OCR failed:', error);
+    throw error;
+  }
 };
 
 const processWithGroq = async (ocrText, activePrompt) => {
-    try {
-        console.log(`[LLM Flow] Dispatching to Groq (Llama-3-70b-versatile)...`);
-        
-        const response = await groq.chat.completions.create({
-            messages: [
-                { role: "system", content: "You are a specialized financial auditor. Extract structured JSON as requested." },
-                { role: "user", content: `${activePrompt}\n\nRAW DATA:\n${ocrText}` }
-            ],
-            model: "llama-3.3-70b-versatile", // Using 3.3 as it is the most stable 70b on groq currently
-            response_format: { type: "json_object" }
-        });
+  try {
+    console.log(`[LLM Flow] Dispatching to Groq (Llama-3-70b-versatile)...`);
 
-        return JSON.parse(response.choices[0].message.content);
-    } catch (error) {
-        console.error('[LLM Flow] Groq execution failed:', error);
-        throw error;
-    }
+    const response = await groq.chat.completions.create({
+      messages: [
+        { role: "system", content: "You are a specialized financial auditor. Extract structured JSON as requested." },
+        { role: "user", content: `${activePrompt}\n\nRAW DATA:\n${ocrText}` }
+      ],
+      model: "llama-3.3-70b-versatile", // Using 3.3 as it is the most stable 70b on groq currently
+      response_format: { type: "json_object" }
+    });
+
+    return JSON.parse(response.choices[0].message.content);
+  } catch (error) {
+    console.error('[LLM Flow] Groq execution failed:', error);
+    throw error;
+  }
 };
 
 const processWithOCRSpace = async (pdfBuffer, activePrompt, activeSchema, engineVariant = "1") => {
   try {
     console.log(`[OCR.space Chain Environment] Sending PDF buffer (${Math.round(pdfBuffer.length / 1024)}KB) to OCR.space with Engine ${engineVariant}...`);
-    
+
     const formData = new FormData();
     formData.append("file", pdfBuffer, { filename: 'statement.pdf', contentType: 'application/pdf' });
     formData.append("apikey", OCR_SPACE_API_KEY);
@@ -784,7 +784,7 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
       let variant = "1";
       if (ocrEngine === 'ocr_space_v2') variant = "2";
       if (ocrEngine === 'ocr_space_v3') variant = "3";
-      
+
       console.log(`[Background] OCR.space Engine ${variant} process starting for ${statementId}...`);
       extraction = await processWithOCRSpace(pdfBuffer, activePrompt, activeSchema, variant);
       console.log(`[Background] OCR.space completed for ${statementId}`);
@@ -794,7 +794,7 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
       console.log(`[Background] Mistral OCR completed for ${statementId}`);
     } else if (ocrEngine === 'mistral_llama_hybrid') {
       console.log(`[Hybrid Flow] Stage 1: Cropping to first page and sending to Mistral OCR...`);
-      
+
       const pdfDoc = await PDFDocument.load(pdfBuffer);
       const firstPageDoc = await PDFDocument.create();
       const [firstPage] = await firstPageDoc.copyPages(pdfDoc, [0]);
@@ -803,10 +803,10 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
 
       const mistralRaw = await processWithMistralOCR(firstPageBuffer, `statement_${statementId}.pdf`);
       const allMarkdown = mistralRaw.data.pages.map(p => p.markdown).join('\n\n');
-      
+
       console.log(`[Hybrid Flow] Stage 2: Mapping markdown to JSON via Groq (Llama 3)...`);
       const llamaResult = await processWithGroq(allMarkdown, activePrompt);
-      
+
       extraction = { ...llamaResult, type: 'MISTRAL_LLAMA_HYBRID_MAPPED', rawMistral: mistralRaw };
       console.log(`[Hybrid Flow] Joint pipeline completed for ${statementId}`);
     } else if (ocrEngine === 'groq_llama') {
@@ -814,13 +814,13 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
       // Groq needs text. We'll use OCR.space V2 as the high-accuracy text provider.
       const rawTextData = await processWithOCRSpace(pdfBuffer, activePrompt, activeSchema, "2");
       const allText = rawTextData.parsedResults.map(p => p.text).join('\n\n');
-      
+
       const groqResult = await processWithGroq(allText, activePrompt);
       extraction = { ...groqResult, type: 'GROQ_LLAMA_MAPPED' };
       console.log(`[Background] Groq LLM completion successful for ${statementId}`);
     } else {
       const model = genAI.getGenerativeModel({
-        model: "gemini-2.0-flash", 
+        model: "gemini-2.5-flash",
         generationConfig: {
           responseMimeType: "application/json",
           responseSchema: activeSchema,
@@ -861,7 +861,7 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
 
     // Save raw AI response for debugging
     statement.rawAIResponse = extraction;
-    
+
     if (extraction && extraction.type === 'OCR_SPACE_RAW') {
       statement.status = 'COMPLETED';
       await statement.save();
@@ -902,7 +902,7 @@ const mapAIResponseToStatement = async (statement, extraction) => {
     const activeSchema = isBank ? bankExtractionSchema : extractionSchema;
 
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash", // Using standard 2.0 Flash for accurate mapping
+      model: "gemini-2.5-flash", // Using gemini-2.5-flash for accurate mapping
       generationConfig: {
         responseMimeType: "application/json",
         responseSchema: activeSchema,
@@ -911,7 +911,7 @@ const mapAIResponseToStatement = async (statement, extraction) => {
 
     const allText = extraction.parsedResults.map(p => p.text).join('\n\n');
     const allOverlay = extraction.parsedResults.map(p => p.overlay);
-    
+
     const chainPrompt = `
     You are an expert financial auditor receiving raw OCR output with coordinate data. 
     Map this raw text to the specified JSON schema with extreme precision.
@@ -938,7 +938,7 @@ const mapAIResponseToStatement = async (statement, extraction) => {
     const activeSchema = isBank ? bankExtractionSchema : extractionSchema;
 
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-flash",
       generationConfig: {
         responseMimeType: "application/json",
         responseSchema: activeSchema,
@@ -946,7 +946,7 @@ const mapAIResponseToStatement = async (statement, extraction) => {
     });
 
     const allMarkdown = extraction.data.pages.map(p => p.markdown).join('\n\n');
-    
+
     const mappingPrompt = `
     You are an expert financial auditor receiving Mistral multi-modal OCR output in Markdown.
     Map this high-fidelity markdown to the specified JSON schema for our audit database.
@@ -960,7 +960,7 @@ const mapAIResponseToStatement = async (statement, extraction) => {
     const result = await model.generateContent([mappingPrompt]);
     const geminiText = result.response.text();
     const mappedResult = JSON.parse(geminiText.replace(/```json/g, "").replace(/```/g, "").trim());
-    
+
     // We keep the original rawAIResponse for debugging but update extraction for the DB merge
     extraction = { ...mappedResult, type: 'MISTRAL_MAPPED' };
   }
