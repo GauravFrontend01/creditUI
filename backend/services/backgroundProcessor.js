@@ -221,6 +221,14 @@ CRITICAL INSTRUCTIONS:
 3. Do NOT abbreviate, truncate, or skip any transactions.
 4. For bank statements, "Deposits" are Credits and "Withdrawals" are Debits.
 5. You MUST extract the "Balance" field for every single transaction row accurately.
+6. IMPORTANT: For all amount fields (Withdrawal, Deposit, Balance, Limits, etc), return ONLY THE RAW NUMBER.
+7. DO NOT include currency names like "INDIAN RUPEE", "INR", "$", or "USD" in the numeric values.
+
+Categorize each transaction into one of: 
+Food, Travel, Shopping, Entertainment, Utilities, Healthcare, 
+Fuel, EMI, Subscription, Forex, Fee, Cashback, Income, Transfer, Other.
+
+Also provide a "categoryConfidence" score from 0 to 100.
 
 For every extracted field, provide bounding box coords in a flat array of exactly 4 numbers: [ymin, xmin, ymax, xmax] in normalized scale [0-1000] and the page number.
 
@@ -242,10 +250,14 @@ Return ONLY valid JSON in this exact structure:
   "transactions": [{
     "date": string,
     "description": "string (the FULL raw text)",
+    "merchantName": "string (cleaned concise name)",
     "deposit": number (0 if none),
     "withdrawal": number (0 if none),
     "balance": number (The running balance PRINTED on this exact row),
     "type": "Credit" | "Debit",
+    "category": string,
+    "categoryConfidence": number,
+    "isRecurring": boolean,
     "box": [number, number, number, number],
     "page": number
   }],
@@ -583,10 +595,14 @@ const bankExtractionSchema = {
         properties: {
           date: { type: "string" },
           description: { type: "string" },
+          merchantName: { type: "string" },
           deposit: { type: "number" },
           withdrawal: { type: "number" },
           balance: { type: "number" },
           type: { type: "string", enum: ["Credit", "Debit"] },
+          category: { type: "string" },
+          categoryConfidence: { type: "number" },
+          isRecurring: { type: "boolean" },
           box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
           page: { type: "number" }
         }

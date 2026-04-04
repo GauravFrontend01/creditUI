@@ -2,23 +2,6 @@ import * as React from "react"
 import { useNavigate } from "react-router-dom"
 import api from "@/lib/api"
 import {
-  flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
-  useReactTable,
-} from "@tanstack/react-table"
-import type {
-  ColumnDef,
-  ColumnFiltersState,
-  SortingState,
-  VisibilityState,
-} from "@tanstack/react-table"
-import {
-  IconArrowUp,
-  IconArrowDown,
-  IconArrowsUpDown,
   IconSearch,
   IconPlus,
   IconLoader2,
@@ -28,22 +11,17 @@ import {
   IconTrendingUp,
   IconAlertCircle,
   IconCheck,
+  IconChevronDown,
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { cn } from "@/lib/utils"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface Statement {
   _id: string
   bankName: { val: string; box?: number[]; page?: number }
+  accountNumber?: { val: string; box?: number[]; page?: number }
+  statementPeriod?: { from: string; to: string; box?: number[]; page?: number }
   createdAt: string
   creditLimit?: { val: number }
   availableLimit?: { val: number }
@@ -53,6 +31,10 @@ interface Statement {
   currency?: string
   status?: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED"
   isApproved?: boolean
+  type?: "CREDIT_CARD" | "BANK"
+  closingBalance?: { val: number }
+  totalDeposits?: { val: number }
+  totalWithdrawals?: { val: number }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -65,232 +47,26 @@ const utilizationColor = (pct: number) => {
   return "text-emerald-600 bg-emerald-50"
 }
 
-// ── Sortable Header ────────────────────────────────────────────────────────
-function SortHeader({ column, label }: { column: any; label: string }) {
-  const sorted = column.getIsSorted()
-  return (
-    <button
-      className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-slate-700 transition-colors"
-      onClick={() => column.toggleSorting(sorted === "asc")}
-    >
-      {label}
-      {sorted === "asc" ? (
-        <IconArrowUp size={12} className="text-primary" />
-      ) : sorted === "desc" ? (
-        <IconArrowDown size={12} className="text-primary" />
-      ) : (
-        <IconArrowsUpDown size={12} />
-      )}
-    </button>
-  )
-}
-
-// ── Column Definitions ─────────────────────────────────────────────────────
-const columns: ColumnDef<Statement>[] = [
-  {
-    id: "select",
-    header: ({ table }) => (
-      <div className="flex items-center justify-center pl-2">
-        <input
-          type="checkbox"
-          className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary/20 accent-primary"
-          checked={table.getIsAllPageRowsSelected() || (table.getIsSomePageRowsSelected() && "indeterminate" as any)}
-          onChange={table.getToggleAllPageRowsSelectedHandler()}
-        />
-      </div>
-    ),
-    cell: ({ row }) => (
-      <div className="flex items-center justify-center pl-2" onClick={(e) => e.stopPropagation()}>
-        <input
-          type="checkbox"
-          className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary/20 accent-primary"
-          checked={row.getIsSelected()}
-          disabled={!row.getCanSelect()}
-          onChange={row.getToggleSelectedHandler()}
-        />
-      </div>
-    ),
-    enableSorting: false,
-    enableHiding: false,
-  },
-  {
-    accessorKey: "bankName.val",
-    id: "bankName",
-    header: ({ column }) => <SortHeader column={column} label="Bank / Statement" />,
-    cell: ({ row }) => (
-      <div className="flex items-center gap-3">
-        <div className="h-9 w-9 rounded-xl bg-primary/8 flex items-center justify-center text-primary shrink-0">
-          <IconCreditCard size={18} />
-        </div>
-        <div>
-          <p className="font-bold text-sm text-slate-900 leading-tight">
-            {typeof row.original.bankName === 'object' ? row.original.bankName.val : row.original.bankName}
-          </p>
-          <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">
-            {new Date(row.original.createdAt).toLocaleDateString("en-GB", {
-              day: "2-digit",
-              month: "short",
-              year: "numeric",
-            })}
-          </p>
-        </div>
-      </div>
-    ),
-  },
-  {
-    accessorKey: "createdAt",
-    id: "createdAt",
-    header: () => null,
-    cell: () => null,
-    enableHiding: true,
-  },
-  {
-    id: "auditStatus",
-    header: ({ column }) => <SortHeader column={column} label="Audit Status" />,
-    cell: ({ row }) => {
-      const status = row.original.status || "COMPLETED"
-      const isApproved = row.original.isApproved
-
-      if (status === "PENDING" || status === "PROCESSING") {
-        return (
-          <div className="flex items-center gap-2 text-amber-600 bg-amber-100/50 px-3 py-1 rounded-full w-fit border border-amber-200">
-            <IconLoader2 size={12} className="animate-spin text-amber-600" />
-            <span className="text-[9px] font-black uppercase tracking-wider">Brain Processing</span>
-          </div>
-        )
-      }
-
-      if (status === "FAILED") {
-        return (
-          <div className="flex items-center gap-2 text-red-600 bg-red-50 px-3 py-1 rounded-full w-fit border border-red-100">
-            <IconAlertCircle size={12} />
-            <span className="text-[9px] font-black uppercase tracking-wider">Failed</span>
-          </div>
-        )
-      }
-
-      if (!isApproved) {
-        return (
-          <div className="flex items-center gap-2 text-blue-600 bg-blue-50 px-3 py-1 rounded-full w-fit border border-blue-100">
-            <IconAlertCircle size={12} className="opacity-70" />
-            <span className="text-[9px] font-black uppercase tracking-wider">Draft Review</span>
-          </div>
-        )
-      }
-
-      return (
-        <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full w-fit border border-emerald-100">
-          <IconCheck size={12} strokeWidth={3} />
-          <span className="text-[9px] font-black uppercase tracking-wider">Verified Audit</span>
-        </div>
-      )
-    },
-  },
-  {
-    accessorKey: "creditLimit.val",
-    id: "creditLimit",
-    header: ({ column }) => <SortHeader column={column} label="Credit Limit" />,
-    cell: ({ row }) => (
-      <p className="font-bold text-sm text-slate-900 tabular-nums">
-        {fmt(row.original.creditLimit?.val)}
-      </p>
-    ),
-    sortingFn: (a, b) =>
-      (a.original.creditLimit?.val ?? 0) - (b.original.creditLimit?.val ?? 0),
-  },
-  {
-    id: "utilization",
-    header: ({ column }) => <SortHeader column={column} label="Utilization" />,
-    cell: ({ row }) => {
-      const limit = row.original.creditLimit?.val ?? 0
-      const outstanding = row.original.outstandingTotal?.val ?? 0
-      const pct = limit > 0 ? Math.round((outstanding / limit) * 100) : 0
-      return (
-        <div className="flex items-center gap-3 min-w-[120px]">
-          <div className="flex-1 bg-slate-100 rounded-full h-1.5 overflow-hidden">
-            <div
-              className={cn(
-                "h-full rounded-full transition-all",
-                pct >= 80 ? "bg-red-500" : pct >= 50 ? "bg-amber-500" : "bg-emerald-500"
-              )}
-              style={{ width: `${Math.min(pct, 100)}%` }}
-            />
-          </div>
-          <span className={cn("text-xs font-bold px-2 py-0.5 rounded-full tabular-nums", utilizationColor(pct))}>
-            {pct}%
-          </span>
-        </div>
-      )
-    },
-    sortingFn: (a, b) => {
-      const pctA = ((a.original.outstandingTotal?.val ?? 0) / (a.original.creditLimit?.val ?? 1)) * 100
-      const pctB = ((b.original.outstandingTotal?.val ?? 0) / (b.original.creditLimit?.val ?? 1)) * 100
-      return pctA - pctB
-    },
-  },
-  {
-    accessorKey: "outstandingTotal.val",
-    id: "outstandingTotal",
-    header: ({ column }) => <SortHeader column={column} label="Outstanding" />,
-    cell: ({ row }) => (
-      <p className="font-bold text-sm text-slate-900 tabular-nums">
-        {fmt(row.original.outstandingTotal?.val)}
-      </p>
-    ),
-    sortingFn: (a, b) =>
-      (a.original.outstandingTotal?.val ?? 0) - (b.original.outstandingTotal?.val ?? 0),
-  },
-  {
-    accessorKey: "minPaymentDue.val",
-    id: "minPaymentDue",
-    header: ({ column }) => <SortHeader column={column} label="Min Due" />,
-    cell: ({ row }) => (
-      <p className="font-semibold text-sm text-amber-600 tabular-nums">
-        {fmt(row.original.minPaymentDue?.val)}
-      </p>
-    ),
-    sortingFn: (a, b) =>
-      (a.original.minPaymentDue?.val ?? 0) - (b.original.minPaymentDue?.val ?? 0),
-  },
-  {
-    id: "txCount",
-    header: ({ column }) => <SortHeader column={column} label="Transactions" />,
-    cell: ({ row }) => {
-      const txs = row.original.transactions ?? []
-      const debits = txs.filter((t) => t.type === "Debit").length
-      const credits = txs.filter((t) => t.type === "Credit").length
-      return (
-        <div className="flex items-center gap-2">
-          <span className="flex items-center gap-1 text-xs font-bold text-slate-700">
-            <IconReceipt2 size={14} className="text-slate-400" />
-            {txs.length}
-          </span>
-          {txs.length > 0 && (
-            <span className="text-[10px] text-slate-400 font-semibold">
-              {debits}D · {credits}C
-            </span>
-          )}
-        </div>
-      )
-    },
-    sortingFn: (a, b) =>
-      (a.original.transactions?.length ?? 0) - (b.original.transactions?.length ?? 0),
-  },
-  {
-    id: "actions",
-    header: () => null,
-    cell: ({ row }) => {
-      const id = row.original._id
-      const name = typeof row.original.bankName === 'object' ? row.original.bankName.val : row.original.bankName
-      return (
-        <div className="flex justify-end pr-2" onClick={(e) => e.stopPropagation()}>
-          <DeleteButton statementId={id} bankName={name} />
-        </div>
-      )
-    },
-    enableSorting: false,
-  },
-]
+/**
+ * Normalizes dates to "23 Feb 2026" style.
+ * Handles both "2025-10-01" and existing "23 Feb 2026" strings.
+ */
+const formatDate = (dateStr?: string) => {
+  if (!dateStr) return "—";
+  
+  // Try parsing as standard date
+  const date = new Date(dateStr);
+  if (!isNaN(date.getTime())) {
+    return date.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric"
+    }).toUpperCase(); // E.g. "23 FEB 2026"
+  }
+  
+  // Fallback: if already a formatted string, return as-is
+  return dateStr.toUpperCase();
+};
 
 // ── Delete Button ──────────────────────────────────────────────────────────
 function DeleteButton({ statementId, bankName }: { statementId: string; bankName: string }) {
@@ -310,6 +86,152 @@ function DeleteButton({ statementId, bankName }: { statementId: string; bankName
   )
 }
 
+// ── Statement Group ────────────────────────────────────────────────────────
+interface GroupProps {
+  name: string
+  accNum: string
+  items: Statement[]
+  navigate: any
+  fmt: (v?: number) => string
+}
+
+function StatementGroup({ name, accNum, items, navigate, fmt }: GroupProps) {
+  const [isOpen, setIsOpen] = React.useState(true)
+  
+  const totalLimit = items.reduce((s, i) => s + (i.creditLimit?.val ?? 0), 0)
+  const totalOutstanding = items.reduce((s, i) => s + (i.outstandingTotal?.val ?? 0), 0)
+  const avgUtil = totalLimit > 0 ? Math.round((totalOutstanding / totalLimit) * 100) : 0
+
+  return (
+    <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden transition-all duration-300">
+      <div 
+        className={cn(
+          "px-8 py-6 flex items-center justify-between cursor-pointer select-none transition-colors",
+          isOpen ? "bg-slate-50/50" : "hover:bg-slate-50/30"
+        )}
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <div className="flex items-center gap-4">
+          <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center text-primary shadow-inner">
+            <IconCreditCard size={24} />
+          </div>
+          <div>
+            <h3 className="text-lg font-black text-slate-900 tracking-tight">{name}</h3>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mt-1">
+              {accNum ? `ACC: ${accNum}` : "UNSPECIFIED ACCOUNT"} • {items.length} STATEMENTS
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-12">
+          {!isOpen && (
+            <div className="hidden md:flex items-center gap-8 animate-in fade-in slide-in-from-right-4 duration-500">
+              <div className="text-right">
+                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Outstanding</p>
+                <p className="text-sm font-bold text-slate-900 tabular-nums">{fmt(totalOutstanding)}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Utilization</p>
+                <p className={cn("text-sm font-bold tabular-nums", utilizationColor(avgUtil))}>{avgUtil}%</p>
+              </div>
+            </div>
+          )}
+          
+          <div className={cn(
+            "h-10 w-10 rounded-xl bg-white border border-slate-100 flex items-center justify-center text-slate-400 transition-transform duration-300 shadow-sm",
+            isOpen && "rotate-180 text-primary border-primary/20"
+          )}>
+            <IconChevronDown size={20} />
+          </div>
+        </div>
+      </div>
+
+      <div className={cn(
+        "grid transition-all duration-500 ease-in-out",
+        isOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+      )}>
+        <div className="overflow-hidden">
+          <div className="px-8 pb-8 pt-2 space-y-3">
+            <div className="grid grid-cols-12 px-6 py-2 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">
+              <div className="col-span-4">Statement Period / Date</div>
+              <div className="col-span-2 text-right pr-4">Balance / Outstanding</div>
+              <div className="col-span-2 text-right pr-4">Activity / Min Due</div>
+              <div className="col-span-2 text-center">Status</div>
+              <div className="col-span-2 text-right pr-4">Action</div>
+            </div>
+
+            {items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).map(st => {
+              const status = st.status || "COMPLETED"
+              return (
+                <div 
+                  key={st._id}
+                  onClick={() => navigate(`/statements/${st._id}`)}
+                  className="grid grid-cols-12 items-center px-6 py-4 rounded-2xl bg-slate-50/30 hover:bg-white hover:shadow-md border border-transparent hover:border-slate-100 transition-all cursor-pointer group"
+                >
+                  <div className="col-span-4 flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-lg bg-white border border-slate-100 flex items-center justify-center text-slate-400 group-hover:text-primary transition-colors shadow-sm">
+                      <IconReceipt2 size={16} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-bold text-slate-700">
+                        {st.statementPeriod?.from && st.statementPeriod?.to
+                          ? `${formatDate(st.statementPeriod.from)} — ${formatDate(st.statementPeriod.to)}` 
+                          : formatDate(st.createdAt)}
+                      </p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                        Processed: {new Date(st.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="col-span-2 font-bold text-sm text-slate-900 tabular-nums text-right pr-4">
+                    {st.type === "BANK" 
+                      ? fmt(st.closingBalance?.val) 
+                      : fmt(st.outstandingTotal?.val)}
+                  </div>
+
+                  <div className="col-span-2 font-bold text-sm text-amber-600 tabular-nums text-right pr-4">
+                    {st.type === "BANK"
+                      ? (
+                        <div className="flex flex-col items-end">
+                           <span className="text-emerald-600">+{st.totalDeposits?.val?.toLocaleString() || '0'}</span>
+                           <span className="text-red-400 text-[10px]">-{st.totalWithdrawals?.val?.toLocaleString() || '0'}</span>
+                        </div>
+                      )
+                      : fmt(st.minPaymentDue?.val)}
+                  </div>
+
+                  <div className="col-span-2 flex justify-center">
+                    {status === "PROCESSING" ? (
+                      <div className="flex items-center gap-1.5 text-amber-500 font-bold text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-50 border border-amber-100/50">
+                        <IconLoader2 size={10} className="animate-spin" />
+                        Linking
+                      </div>
+                    ) : st.isApproved ? (
+                      <div className="flex items-center gap-1.5 text-emerald-600 font-bold text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-100/50">
+                        <IconCheck size={10} strokeWidth={3} />
+                        Verified
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 text-blue-500 font-bold text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 border border-blue-100/50">
+                        <IconAlertCircle size={10} />
+                        Review
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="col-span-2 flex justify-end pr-2" onClick={e => e.stopPropagation()}>
+                    <DeleteButton statementId={st._id} bankName={st.bankName.val} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function StatCard({
   icon: Icon,
@@ -325,7 +247,7 @@ function StatCard({
   color: string
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 p-5 space-y-3 shadow-sm">
+    <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{label}</p>
         <div className={cn("h-8 w-8 rounded-xl flex items-center justify-center", color)}>
@@ -342,15 +264,8 @@ function StatCard({
 export default function StatementsList() {
   const [statements, setStatements] = React.useState<Statement[]>([])
   const [loading, setLoading] = React.useState(true)
-  const [sorting, setSorting] = React.useState<SortingState>([
-    { id: "createdAt", desc: true },
-  ])
-  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
-  const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({})
   const [globalFilter, setGlobalFilter] = React.useState("")
   const [deleteDialog, setDeleteDialog] = React.useState<{id: string, name: string} | null>(null)
-  const [rowSelection, setRowSelection] = React.useState({})
-  const [isBulkDeleting, setIsBulkDeleting] = React.useState(false)
   const navigate = useNavigate()
 
   React.useEffect(() => {
@@ -361,13 +276,11 @@ export default function StatementsList() {
         const res = await api.get("/api/statements");
         setStatements(res.data);
 
-        // Check for active background jobs
         const hasActiveJobs = res.data.some((s: Statement) => 
           s.status === "PENDING" || s.status === "PROCESSING"
         );
 
         if (hasActiveJobs) {
-          // Poll every 4 seconds
           timeoutId = setTimeout(fetch_, 4000);
         }
       } catch (err) {
@@ -384,7 +297,6 @@ export default function StatementsList() {
     };
   }, []);
 
-  // Remove deleted row from state instantly without refetch
   React.useEffect(() => {
     const handler = (e: Event) => {
       const id = (e as CustomEvent).detail
@@ -403,215 +315,111 @@ export default function StatementsList() {
     }
   }, [])
 
-  const table = useReactTable({
-    data: statements,
-    columns,
-    state: { sorting, columnFilters, columnVisibility, globalFilter, rowSelection },
-    enableRowSelection: true,
-    onRowSelectionChange: setRowSelection,
-    onSortingChange: setSorting,
-    onColumnFiltersChange: setColumnFilters,
-    onColumnVisibilityChange: setColumnVisibility,
-    onGlobalFilterChange: setGlobalFilter,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    getRowId: (row) => row._id,
-    initialState: { pagination: { pageSize: 10000 } },
-  })
+  const groupedData = React.useMemo(() => {
+    const groups: Record<string, { name: string; accNum: string; items: Statement[] }> = {}
+    
+    statements.forEach(s => {
+      if (globalFilter) {
+        const q = globalFilter.toLowerCase()
+        const bankMatch = s.bankName.val.toLowerCase().includes(q)
+        const accMatch = (s.accountNumber?.val || "").toLowerCase().includes(q)
+        const periodMatch = `${s.statementPeriod?.from || ""} ${s.statementPeriod?.to || ""}`.toLowerCase().includes(q)
+        if (!bankMatch && !accMatch && !periodMatch) return
+      }
 
-  // ── Aggregate stats ──
-  const totalOutstanding = statements.reduce((s, st) => s + (st.outstandingTotal?.val ?? 0), 0)
-  const totalCreditLimit = statements.reduce((s, st) => s + (st.creditLimit?.val ?? 0), 0)
-  const totalMinDue = statements.reduce((s, st) => s + (st.minPaymentDue?.val ?? 0), 0)
+      const bankKey = s.bankName.val || "Unknown Bank"
+      const accKey = s.accountNumber?.val || "N/A"
+      const key = `${bankKey}-${accKey}`
+
+      if (!groups[key]) {
+        groups[key] = { 
+          name: bankKey, 
+          accNum: s.accountNumber?.val || "", 
+          items: [] 
+        }
+      }
+      groups[key].items.push(s)
+    })
+    
+    return Object.values(groups).sort((a, b) => a.name.localeCompare(b.name))
+  }, [statements, globalFilter])
+
+  const creditStatements = statements.filter(s => s.type !== "BANK")
+  const totalOutstanding = creditStatements.reduce((s, st) => s + (st.outstandingTotal?.val ?? 0), 0)
+  const totalCreditLimit = creditStatements.reduce((s, st) => s + (st.creditLimit?.val ?? 0), 0)
+  const totalMinDue = creditStatements.reduce((s, st) => s + (st.minPaymentDue?.val ?? 0), 0)
   const avgUtil = totalCreditLimit > 0 ? Math.round((totalOutstanding / totalCreditLimit) * 100) : 0
 
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-slate-50 gap-4">
         <IconLoader2 className="h-10 w-10 animate-spin text-primary" />
-        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Loading Statements...</p>
+        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Loading Portfolios...</p>
       </div>
     )
   }
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans">
-      <div className="max-w-[1600px] mx-auto px-8 py-10 space-y-8">
+      <div className="max-w-[1600px] mx-auto px-8 py-10 space-y-10">
 
-        {/* ── Header ── */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-black tracking-tight text-slate-900">My Statements</h1>
-            <p className="text-sm text-slate-500 mt-1 font-medium">
-              {statements.length} audited statement{statements.length !== 1 ? "s" : ""} on record
+            <h1 className="text-4xl font-black tracking-tight text-slate-900">Portfolio Vault</h1>
+            <p className="text-sm text-slate-500 mt-1 font-medium italic">
+              {statements.length} forensic statement audits active
             </p>
           </div>
-          <Button
-            onClick={() => navigate("/")}
-            className="rounded-xl px-6 h-11 gap-2 shadow-sm font-bold text-sm"
-          >
-            <IconPlus size={16} /> New Analysis
-          </Button>
+          <div className="flex items-center gap-4">
+            <div className="relative group">
+              <IconSearch size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary transition-colors" />
+              <input
+                type="text"
+                placeholder="Search audit trail..."
+                value={globalFilter}
+                onChange={(e) => setGlobalFilter(e.target.value)}
+                className="h-12 w-80 pl-11 pr-4 bg-white border border-slate-200 rounded-2xl shadow-sm text-sm font-bold placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/30 transition-all"
+              />
+            </div>
+            <Button
+              onClick={() => navigate("/")}
+              className="rounded-2xl px-6 h-12 gap-2 shadow-lg shadow-primary/20 font-black text-sm uppercase tracking-wider"
+            >
+              <IconPlus size={18} strokeWidth={3} /> New Audit
+            </Button>
+          </div>
         </div>
 
-        {/* ── Summary Cards ── */}
         {statements.length > 0 && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard
-              icon={IconCreditCard}
-              label="Total Credit Limit"
-              value={fmt(totalCreditLimit)}
-              sub={`Across ${statements.length} cards`}
-              color="bg-blue-50 text-blue-600"
-            />
-            <StatCard
-              icon={IconAlertCircle}
-              label="Total Outstanding"
-              value={fmt(totalOutstanding)}
-              sub="Combined balance"
-              color="bg-red-50 text-red-500"
-            />
-            <StatCard
-              icon={IconTrendingUp}
-              label="Avg Utilization"
-              value={`${avgUtil}%`}
-              sub={avgUtil >= 80 ? "⚠ High utilization" : "Healthy range"}
-              color={avgUtil >= 80 ? "bg-red-50 text-red-500" : "bg-emerald-50 text-emerald-600"}
-            />
-            <StatCard
-              icon={IconReceipt2}
-              label="Total Min Due"
-              value={fmt(totalMinDue)}
-              sub="This month"
-              color="bg-amber-50 text-amber-600"
-            />
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <StatCard icon={IconCreditCard} label="Portfolio Limit" value={fmt(totalCreditLimit)} sub={`Across ${groupedData.length} Banks`} color="bg-blue-50 text-blue-600" />
+            <StatCard icon={IconAlertCircle} label="Combined Debt" value={fmt(totalOutstanding)} sub="Live aggregate" color="bg-red-50 text-red-500" />
+            <StatCard icon={IconTrendingUp} label="Utilization" value={`${avgUtil}%`} sub={avgUtil >= 80 ? "Critical usage" : "Safe range"} color={avgUtil >= 80 ? "bg-red-100 text-red-600" : "bg-emerald-50 text-emerald-600"} />
+            <StatCard icon={IconReceipt2} label="Upcoming Min" value={fmt(totalMinDue)} sub="Priority focus" color="bg-amber-50 text-amber-600" />
           </div>
         )}
 
-        {/* ── Table Card ── */}
-        <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
-
-          {/* Toolbar */}
-          <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-4 flex-1">
-              <div className="relative flex-1 max-w-sm">
-                <IconSearch
-                  size={15}
-                  className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
-                />
-                <input
-                  type="text"
-                  placeholder="Search statements..."
-                  value={globalFilter}
-                  onChange={(e) => setGlobalFilter(e.target.value)}
-                  className="w-full h-9 pl-9 pr-4 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:bg-white transition-all"
-                />
+        <div className="space-y-6">
+          {groupedData.length > 0 ? (
+            groupedData.map(group => (
+              <StatementGroup key={`${group.name}-${group.accNum}`} {...group} navigate={navigate} fmt={fmt} />
+            ))
+          ) : (
+            <div className="py-32 flex flex-col items-center justify-center bg-white rounded-[3rem] border border-dashed border-slate-200 text-slate-300 gap-4">
+              <div className="h-20 w-20 rounded-3xl bg-slate-50 flex items-center justify-center">
+                <IconReceipt2 size={40} className="opacity-20" />
               </div>
-              
-              {Object.keys(rowSelection).length > 0 && (
-                <div className="flex items-center gap-2 animate-in slide-in-from-left-2 duration-200">
-                  <div className="h-4 w-[1px] bg-slate-200 mx-1" />
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-9 px-4 gap-2 text-red-500 hover:bg-red-50 hover:text-red-600 font-bold text-xs rounded-xl"
-                    onClick={async () => {
-                      const selectedIds = Object.keys(rowSelection);
-                      if (confirm(`Delete ${selectedIds.length} statements? This action cannot be undone.`)) {
-                        setIsBulkDeleting(true);
-                        try {
-                          await api.post("/api/statements/bulk-delete", { ids: selectedIds });
-                          setStatements(prev => prev.filter(s => !selectedIds.includes(s._id)));
-                          setRowSelection({});
-                        } catch (err) {
-                          console.error("Bulk delete failed", err);
-                          alert("Failed to delete statements. Please try again.");
-                        } finally {
-                          setIsBulkDeleting(false);
-                        }
-                      }
-                    }}
-                    disabled={isBulkDeleting}
-                  >
-                    {isBulkDeleting ? (
-                      <IconLoader2 size={14} className="animate-spin" />
-                    ) : (
-                      <IconTrash size={14} />
-                    )}
-                    Delete ({Object.keys(rowSelection).length})
-                  </Button>
-                </div>
-              )}
+              <div className="text-center">
+                <p className="text-lg font-black text-slate-400">Zero Audits Found</p>
+                <p className="text-sm font-bold text-slate-300 mt-1 uppercase tracking-widest">Awaiting Neural Extraction</p>
+              </div>
+              <Button onClick={() => navigate("/")} variant="outline" className="mt-4 rounded-xl px-8 h-12 border-slate-200 text-slate-500 font-bold hover:bg-slate-50 transition-all">
+                Initiate New Audit
+              </Button>
             </div>
-            
-            <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest shrink-0">
-              {table.getFilteredRowModel().rows.length} results
-            </p>
-          </div>
-
-          {/* Table Container with Scroll */}
-          <div className="max-h-[600px] overflow-auto custom-scrollbar">
-            <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((hg) => (
-                <TableRow key={hg.id} className="bg-slate-50/80 hover:bg-slate-50/80 border-b border-slate-100">
-                  {hg.headers.map((h) => (
-                    <TableHead
-                      key={h.id}
-                      className="px-6 py-3 first:pl-6 last:pr-6 sticky top-0 bg-slate-50/95 z-10 backdrop-blur-sm shadow-sm"
-                    >
-                      {h.isPlaceholder
-                        ? null
-                        : flexRender(h.column.columnDef.header, h.getContext())}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHeader>
-
-            <TableBody>
-              {table.getRowModel().rows.length > 0 ? (
-                table.getRowModel().rows.map((row) => (
-                  <TableRow
-                    key={row.id}
-                    className="cursor-pointer border-b border-slate-50 hover:bg-slate-50/70 transition-colors group"
-                    onClick={() => navigate(`/statements/${row.original._id}`)}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id} className="px-6 py-4 first:pl-6 last:pr-6">
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : (
-                <TableRow>
-                  <TableCell colSpan={columns.length} className="h-48 text-center">
-                    <div className="flex flex-col items-center gap-3 text-slate-300">
-                      <IconCreditCard size={40} />
-                      <div>
-                        <p className="font-bold text-sm text-slate-500">No statements found</p>
-                        <p className="text-xs text-slate-400 mt-0.5">
-                          {globalFilter ? "Try a different search term" : "Start by analysing a bank statement"}
-                        </p>
-                      </div>
-                      {!globalFilter && (
-                        <Button size="sm" variant="outline" className="mt-2 rounded-lg font-bold text-xs" onClick={() => navigate("/")}>
-                          Start Analysis
-                        </Button>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
+          )}
         </div>
 
-        {/* Custom Delete Confirmation Modal */}
         {deleteDialog && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 animate-in fade-in duration-300">
             <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setDeleteDialog(null)} />
@@ -620,20 +428,14 @@ export default function StatementsList() {
                 <IconTrash size={32} />
               </div>
               <div className="space-y-2">
-                <h3 className="text-xl font-bold text-slate-900">Delete Statement?</h3>
+                <h3 className="text-xl font-bold text-slate-900">Delete Audit?</h3>
                 <p className="text-sm text-slate-500 leading-relaxed px-4">
-                  Are you sure you want to delete <span className="font-bold text-slate-700">"{deleteDialog.name}"</span>? 
-                  This action is permanent and will remove all audit data.
+                  Confirm deletion of <span className="font-bold text-slate-700">"{deleteDialog.name}"</span> audit record? 
+                  This forensic evidence will be unrecoverable.
                 </p>
               </div>
               <div className="flex gap-3 w-full">
-                <Button 
-                  variant="outline" 
-                  className="flex-1 h-12 rounded-xl font-bold text-slate-500 border-slate-200" 
-                  onClick={() => setDeleteDialog(null)}
-                >
-                  Cancel
-                </Button>
+                <Button variant="outline" className="flex-1 h-12 rounded-xl font-bold text-slate-500 border-slate-200" onClick={() => setDeleteDialog(null)}>Cancel</Button>
                 <Button 
                   className="flex-1 h-12 rounded-xl font-bold bg-red-500 hover:bg-red-600 border-0" 
                   onClick={async () => {
@@ -643,7 +445,7 @@ export default function StatementsList() {
                       await api.delete(`/api/statements/${id}`);
                       window.dispatchEvent(new CustomEvent('statement-deleted', { detail: id }));
                     } catch (err) {
-                      console.error("Delete failed from modal", err);
+                      console.error("Delete failed", err);
                     }
                   }}
                 >

@@ -113,15 +113,30 @@ interface StatementData {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 const getCurrencySymbol = (code?: string) => {
-  switch (code?.toUpperCase()) {
-    case 'INR': return '₹'; case 'USD': return '$';
-    case 'GBP': return '£'; case 'EUR': return '€';
-    default: return code || '₹';
-  }
+  const c = code?.toUpperCase() || ''
+  if (c.includes('INR') || c.includes('RUPEE')) return '₹';
+  if (c.includes('USD') || c.includes('DOLLAR')) return '$';
+  if (c.includes('GBP') || c.includes('POUND')) return '£';
+  if (c.includes('EUR') || c.includes('EURO')) return '€';
+  return '₹';
 }
 
-const fmt = (val?: number, sym = '₹') =>
-  val != null ? `${sym}${val.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : '—'
+const fmt = (val?: any, sym = '₹') => {
+  if (val == null) return '—'
+  
+  let num: number;
+  if (typeof val === 'string') {
+    // Robust cleaning for strings like "INDIAN RUPEE 7,142.45"
+    const cleaned = val.replace(/[^\d.-]/g, '');
+    num = parseFloat(cleaned);
+  } else {
+    num = val;
+  }
+
+  if (isNaN(num)) return '—';
+  
+  return `${sym}${num.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+}
 
 const CATEGORY_COLORS: Record<string, string> = {
   Food:          'bg-orange-50 text-orange-600',
