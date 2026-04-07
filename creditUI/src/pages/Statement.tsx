@@ -1,13 +1,14 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import api from "@/lib/api"
+import { txRuleKey } from "@/lib/vendorRules"
 import { cn } from "@/lib/utils"
 import {
   IconDownload, IconArrowLeft, IconFileOff, IconLoader2,
   IconReceipt2, IconChartBar, IconCreditCard, IconCalendar,
   IconTrendingDown, IconTrendingUp, IconGift, IconShieldCheck, IconAlertTriangle, IconShieldX,
   IconArrowUp, IconArrowDown, IconArrowsUpDown, IconCheck, IconX, IconEqual, IconPlus, IconMinus, IconMath,
-  IconTerminal2, IconPlayerPlay
+  IconTerminal2, IconPlayerPlay, IconHistory, IconArrowRight
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -25,6 +26,13 @@ import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url"
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker
 
 // ── Types ──────────────────────────────────────────────────────────────────
+interface VendorRuleRow {
+  _id?: string
+  merchantName: string
+  category: string
+  vendorLabel?: string
+}
+
 interface Transaction {
   _id: string
   date: string
@@ -39,6 +47,7 @@ interface Transaction {
   categoryConfidence?: number
   isRecurring?: boolean
   isForex?: boolean
+  isInternal?: boolean
   box: number[]
   page: number
 }
@@ -46,12 +55,25 @@ interface Transaction {
 interface EmiItem {
   name: string
   amount: number
+  tenure?: number
+  paidInstallments?: number
+  remainingInstallments?: number
   box: number[]
   page: number
 }
 
 interface StatVal { val?: number; box?: number[]; page?: number }
 interface StatStr { val?: string; box?: number[]; page?: number }
+
+interface VersionHistory {
+  snapshotAt: string
+  transactions: Transaction[]
+  emiList: EmiItem[]
+  summary: string
+  reconciliation: any
+  extractionQuality: string
+  ocrEngine: string
+}
 
 interface StatementData {
   _id: string
@@ -87,9 +109,11 @@ interface StatementData {
   pdfStorageUrl?: string
   pdfPassword?: string
   status?: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED"
+  processingError?: string
   isApproved?: boolean
   ocrEngine?: 'gemini' | 'ocr_space' | 'ocr_space_v1' | 'ocr_space_v2' | 'ocr_space_v3'
   extractionQuality?: 'verified' | 'minor_mismatch' | 'extraction_error' | 'unverified'
+  versions?: VersionHistory[]
   reconciliation?: {
     matched: boolean;
     balanceDelta: number;
@@ -173,7 +197,11 @@ function SortHeader({ column, label }: { column: any; label: string }) {
 function buildColumns(
   sym: string,
   onCategoryUpdate: (tx: Transaction, newCat: string) => void,
-  type: 'CREDIT_CARD' | 'BANK' = 'CREDIT_CARD'
+  type: 'CREDIT_CARD' | 'BANK' = 'CREDIT_CARD',
+  vendorExtras?: {
+    getVendorLabel: (tx: Transaction) => string
+    onVendorLabelBlur: (tx: Transaction, value: string) => void
+  }
 ): ColumnDef<Transaction>[] {
   const isBank = type === 'BANK';
 
@@ -194,11 +222,16 @@ function buildColumns(
         const tx = row.original
         return (
           <div className="py-1">
-            <p className="font-bold text-[13px] text-slate-800 truncate max-w-[320px]">
+            <p className="font-bold text-[13px] text-slate-800 truncate max-w-[320px] flex items-center">
               {tx.merchantName || tx.description}
+              {tx.isInternal && (
+                <span className="ml-2 text-[8px] font-black uppercase tracking-widest bg-indigo-50 text-indigo-500 px-1.5 py-0.5 rounded border border-indigo-100 shrink-0">
+                  Internal
+                </span>
+              )}
             </p>
             {tx.merchantName && tx.merchantName !== tx.description && (
-              <p className="text-[10px] text-slate-400 truncate max-w-[320px] leading-tight">{tx.description}</p>
+              <p className="text-[10px] text-slate-400 truncate max-w-[320px] leading-tight mt-0.5">{tx.description}</p>
             )}
           </div>
         )
@@ -210,28 +243,42 @@ function buildColumns(
       cell: ({ row }) => {
         const cat = row.original.category || 'Other'
         const conf = row.original.categoryConfidence ?? 100
+        const vLabel = vendorExtras?.getVendorLabel(row.original) ?? ''
         return (
-          <div className="relative group flex items-center w-max">
-            <span className={cn(
-              'text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 group-hover:ring-2 ring-slate-200 transition-all cursor-pointer',
-              CATEGORY_COLORS[cat] ?? CATEGORY_COLORS.Other
-            )}>
-              {cat}
-              {conf < 80 && (
-                <IconAlertTriangle size={10} className="text-amber-500 opacity-80" />
-              )}
-            </span>
-            <select
-              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-              value={cat}
-              onChange={(e) => onCategoryUpdate(row.original, e.target.value)}
-              onClick={(e) => e.stopPropagation()}
-              title="Change category"
-            >
-              {Object.keys(CATEGORY_COLORS).map(k => (
-                <option key={k} value={k}>{k}</option>
-              ))}
-            </select>
+          <div className="flex flex-col gap-1 items-start min-w-[128px]">
+            <div className="relative group flex items-center w-max">
+              <span className={cn(
+                'text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 group-hover:ring-2 ring-slate-200 transition-all cursor-pointer',
+                CATEGORY_COLORS[cat] ?? CATEGORY_COLORS.Other
+              )}>
+                {cat}
+                {conf < 80 && (
+                  <IconAlertTriangle size={10} className="text-amber-500 opacity-80" />
+                )}
+              </span>
+              <select
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                value={cat}
+                onChange={(e) => onCategoryUpdate(row.original, e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+                title="Change category"
+              >
+                {Object.keys(CATEGORY_COLORS).map(k => (
+                  <option key={k} value={k}>{k}</option>
+                ))}
+              </select>
+            </div>
+            {vendorExtras && (
+              <input
+                type="text"
+                className="w-full max-w-[148px] text-[9px] font-semibold text-slate-500 border border-slate-200/80 rounded-md px-1.5 py-0.5 bg-white placeholder:text-slate-300 focus:outline-none focus:ring-1 focus:ring-primary/30"
+                placeholder="Vendor tag (e.g. office food)"
+                defaultValue={vLabel}
+                key={`${txRuleKey(row.original)}-${vLabel}`}
+                onClick={(e) => e.stopPropagation()}
+                onBlur={(e) => vendorExtras.onVendorLabelBlur(row.original, e.target.value)}
+              />
+            )}
           </div>
         )
       },
@@ -386,7 +433,7 @@ function Statement() {
   const [activeBox, setActiveBox] = useState<{ box: number[]; page: number; id: string } | null>(null)
   const [linePath, setLinePath] = useState("")
   const [isSavedView, setIsSavedView] = useState(false)
-  const [tab, setTab] = useState<'transactions' | 'emi' | 'overview' | 'raw_ocr'>('transactions')
+  const [tab, setTab] = useState<'transactions' | 'emi' | 'overview' | 'raw_ocr' | 'history'>('transactions')
   const [forensicType, setForensicType] = useState<'CREDIT_CARD' | 'BANK'>('CREDIT_CARD');
   const [txSorting, setTxSorting] = useState<SortingState>([])
   const [txGlobalFilter, setTxGlobalFilter] = useState("")
@@ -396,6 +443,7 @@ function Statement() {
   const [reprocessing, setReprocessing] = useState(false);
   const [showVault, setShowVault] = useState(false);
   const [injectedJson, setInjectedJson] = useState('');
+  const [vendorRules, setVendorRules] = useState<VendorRuleRow[]>([])
 
   const { id } = useParams()
   const navigate = useNavigate()
@@ -464,6 +512,18 @@ function Statement() {
       if (pollInterval) clearInterval(pollInterval);
     }
   }, [id])
+
+  useEffect(() => {
+    api.get('/api/vendor-rules').then((res) => setVendorRules(res.data)).catch(() => {})
+  }, [])
+
+  const vendorRulesByKey = useMemo(() => {
+    const m = new Map<string, VendorRuleRow>()
+    for (const r of vendorRules) {
+      m.set(r.merchantName.trim().toLowerCase(), r)
+    }
+    return m
+  }, [vendorRules])
 
   // ── PDF loaders ───────────────────────────────────────────────────────────
   const renderPdfBuffer = async (buf: ArrayBuffer, pass?: string) => {
@@ -552,6 +612,8 @@ function Statement() {
     }
   }
   const handleCategoryUpdate = async (tx: Transaction, newCat: string) => {
+    const rk = txRuleKey(tx)
+    const existing = vendorRulesByKey.get(rk)
     // Optimistic UI update
     setData(prev => {
       if (!prev) return prev;
@@ -566,21 +628,49 @@ function Statement() {
     });
 
     try {
-      if (tx.merchantName) {
+      const merchantName = (tx.merchantName || '').trim() || (tx.description || '').trim().slice(0, 96)
+      if (merchantName) {
         await api.post('/api/vendor-rules', {
-          merchantName: tx.merchantName,
-          category: newCat
+          merchantName,
+          category: newCat,
+          vendorLabel: existing?.vendorLabel ?? '',
         });
+        setVendorRules((prev) => {
+          const key = merchantName.trim().toLowerCase()
+          const rest = prev.filter((r) => r.merchantName.trim().toLowerCase() !== key)
+          return [...rest, { merchantName: key, category: newCat, vendorLabel: existing?.vendorLabel ?? '' }]
+        })
       }
     } catch (e) {
       console.error("Failed to save vendor rule:", e);
     }
   };
 
+  const handleVendorLabelBlur = async (tx: Transaction, value: string) => {
+    const merchantName = (tx.merchantName || '').trim() || (tx.description || '').trim().slice(0, 96)
+    if (!merchantName) return
+    const category = tx.category || 'Other'
+    const trimmed = value.trim()
+    try {
+      await api.post('/api/vendor-rules', { merchantName, category, vendorLabel: trimmed })
+      const key = merchantName.trim().toLowerCase()
+      setVendorRules((prev) => {
+        const rest = prev.filter((r) => r.merchantName.trim().toLowerCase() !== key)
+        return [...rest, { merchantName: key, category, vendorLabel: trimmed }]
+      })
+    } catch (e) {
+      console.error("Failed to save vendor label:", e);
+    }
+  }
+
   const txColumns = buildColumns(
     data?.currency ? getCurrencySymbol(data.currency) : '₹', 
     handleCategoryUpdate,
-    data?.type
+    data?.type,
+    {
+      getVendorLabel: (tx) => vendorRulesByKey.get(txRuleKey(tx))?.vendorLabel ?? '',
+      onVendorLabelBlur: handleVendorLabelBlur,
+    }
   )
 
   const handleReprocess = async () => {
@@ -599,7 +689,22 @@ function Statement() {
       setReprocessing(false);
     }
   };
-  
+
+  const handleReIngest = async () => {
+    if (!id) return;
+    try {
+      setReprocessing(true);
+      await api.post(`/api/statements/${id}/re-ingest`);
+      setToast({ message: "Re-ingestion cycle initiated", visible: true, type: "success" });
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+    } catch (error: any) {
+      setToast({ message: "Re-ingestion failed", visible: true, type: "error" });
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+    } finally {
+      setReprocessing(false);
+    }
+  };
+
   const handleInjection = async () => {
     if (!id || !injectedJson) return;
     try {
@@ -724,11 +829,13 @@ function Statement() {
     ? Math.round(((data.outstandingTotal?.val ?? 0) / data.creditLimit.val) * 100) : 0
 
   // Compute totals directly from transactions — always matches what user sees
-  // ROOT CAUSE FIX: Exclude merchant EMIs (mostly SBI Card "FP EMI") from sums to prevent double counting
+  // ROOT CAUSE FIX: Exclude merchant EMIs (mostly SBI Card "FP EMI") and Internal Transfers from sums
   const txTotalDebits  = txs
-    .filter(t => t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI'))
+    .filter(t => t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI') && !t.isInternal && t.category !== 'Transfer')
     .reduce((s, t) => s + (t.amount || t.withdrawal || 0), 0)
-  const txTotalCredits = txs.filter(t => t.type === 'Credit').reduce((s, t) => s + (t.amount || t.deposit || 0), 0)
+  const txTotalCredits = txs
+    .filter(t => t.type === 'Credit' && !t.isInternal && t.category !== 'Transfer')
+    .reduce((s, t) => s + (t.amount || t.deposit || 0), 0)
   const txTotalFees    = txs
     .filter(t => t.category === 'Fee' && t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI'))
     .reduce((s, t) => s + (t.amount || 0), 0)
@@ -909,6 +1016,35 @@ function Statement() {
                    >
                      Raw JSON
                    </Button>
+
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={handleReIngest} 
+                      disabled={reprocessing} 
+                      className={cn(
+                        "h-11 px-4 rounded-xl border-dashed transition-all font-bold text-[10px] uppercase tracking-widest gap-2", 
+                        reprocessing && "animate-pulse",
+                        data?.status === 'FAILED' 
+                          ? "border-red-300 bg-red-50 text-red-600 hover:bg-red-100 ring-1 ring-red-200 shadow-[0_0_15px_-3px_rgba(239,68,68,0.2)]" 
+                          : "border-slate-200 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200"
+                      )}
+                      title={data?.status === 'FAILED' ? `Error: ${data.processingError}` : "Re-launch AI extraction cycle"}
+                    >
+                      {reprocessing ? (
+                        <>
+                          <IconLoader2 size={14} className={cn("animate-spin", data?.status === 'FAILED' ? "text-red-500" : "text-emerald-500")} />
+                          {data?.status === 'FAILED' ? 'Retrying...' : 'Ingesting...'}
+                        </>
+                      ) : (
+                        <>
+                          {data?.status === 'FAILED' ? <IconAlertTriangle size={14} /> : <IconReceipt2 size={14} />}
+                          {data?.status === 'FAILED' ? 'Retry Audit' : 'Re-Ingest'}
+                        </>
+                      )}
+                    </Button>
+
+
                    <Button 
                      variant="outline" 
                      size="sm" 
@@ -990,6 +1126,29 @@ function Statement() {
           </div>
         </div>
 
+        {data.status === 'FAILED' && (
+          <div className="mx-6 mt-4 p-4 bg-red-50/50 border border-red-100 rounded-2xl flex items-start gap-4 animate-in slide-in-from-top-4 duration-500">
+            <div className="h-10 w-10 rounded-2xl bg-red-100 flex items-center justify-center shrink-0 border border-red-200">
+              <IconAlertTriangle size={20} className="text-red-600" />
+            </div>
+            <div className="flex-1 space-y-1 py-0.5">
+              <h4 className="text-xs font-black text-red-900 uppercase tracking-tighter">AI Extraction Engine Offline</h4>
+              <p className="text-[11px] font-bold text-red-600/70 leading-relaxed max-w-2xl">
+                The forensic pipeline encountered a blockage: <span className="text-red-700">{data.processingError || "Unknown connection error."}</span>
+              </p>
+              <div className="flex items-center gap-4 mt-2">
+                 <button onClick={handleReIngest} className="text-[10px] font-black text-red-600 hover:text-red-800 uppercase tracking-widest flex items-center gap-1.5 transition-colors">
+                    <IconReceipt2 size={12} /> Re-Initialize Engine
+                 </button>
+                 <span className="h-1 w-1 rounded-full bg-red-200" />
+                 <p className="text-[9px] font-bold text-red-400 uppercase tracking-widest">
+                    Tip: If spending cap is exceeded, wait a few minutes or switch API keys.
+                 </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="shrink-0 flex items-center gap-1 px-6 py-2 border-b bg-slate-50/50">
           <TabBtn active={tab === 'transactions'} onClick={() => setTab('transactions')} icon={IconReceipt2} label="Transactions" count={txs.length} />
@@ -1000,6 +1159,9 @@ function Statement() {
             <TabBtn active={tab === 'raw_ocr' as any} onClick={() => setTab('raw_ocr' as any)} icon={IconReceipt2} label="Raw OCR" />
           )}
           <TabBtn active={tab === 'overview'} onClick={() => setTab('overview')} icon={IconChartBar} label="Overview" />
+          {data.versions && data.versions.length > 0 && (
+            <TabBtn active={tab === 'history'} onClick={() => setTab('history')} icon={IconHistory} label="History" count={data.versions.length} />
+          )}
         </div>
 
         {/* ── Tab: Transactions ── */}
@@ -1306,10 +1468,38 @@ function Statement() {
                     <p className="text-[10px] text-slate-400 font-semibold">/ month</p>
                   </div>
                 </div>
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  <div className="bg-slate-50/50 p-2 rounded-xl border border-slate-100">
+                    <p className="text-[8px] font-black text-slate-400 uppercase tracking-[0.1em]">Total Tenure</p>
+                    <p className="text-xs font-black text-slate-700">{emi.tenure ? `${emi.tenure} months` : '—'}</p>
+                  </div>
+                  <div className="bg-emerald-50/50 p-2 rounded-xl border border-emerald-100">
+                    <p className="text-[8px] font-black text-emerald-500 uppercase tracking-[0.1em]">Paid So Far</p>
+                    <p className="text-xs font-black text-emerald-700">{emi.paidInstallments ?? '—'}</p>
+                  </div>
+                  <div className="bg-amber-50/50 p-2 rounded-xl border border-amber-100">
+                    <p className="text-[8px] font-black text-amber-500 uppercase tracking-[0.1em]">Installments Left</p>
+                    <p className="text-xs font-black text-amber-700">{emi.remainingInstallments ?? '—'}</p>
+                  </div>
+                </div>
+
                 {emi.page && (
-                  <div className="mt-3 pt-3 border-t border-slate-50 flex items-center gap-1.5">
-                    <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-slate-50 text-slate-400 border">Page {emi.page}</span>
-                    <span className="text-[9px] text-slate-300">Click to locate on PDF</span>
+                  <div className="mt-4 pt-3 border-t border-slate-50 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[9px] font-bold px-2 py-0.5 rounded bg-slate-50 text-slate-400 border">Page {emi.page}</span>
+                      <span className="text-[9px] text-slate-300">Located on PDF audit</span>
+                    </div>
+                    {emi.tenure && emi.paidInstallments && (
+                      <div className="flex items-center gap-1">
+                        <div className="h-1 w-12 bg-slate-100 rounded-full overflow-hidden">
+                           <div 
+                             className="h-full bg-emerald-500 rounded-full" 
+                             style={{ width: `${Math.min(100, (emi.paidInstallments / emi.tenure) * 100)}%` }}
+                           />
+                        </div>
+                        <span className="text-[9px] font-black text-slate-400">{Math.round((emi.paidInstallments / emi.tenure) * 100)}%</span>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1428,6 +1618,63 @@ function Statement() {
                 </Button>
               </div>
             )}
+          </div>
+        )}
+        
+        {/* ── Tab: History ── */}
+        {tab === 'history' && data && data.versions && (
+          <div className="flex-1 overflow-auto p-8 space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-400">
+            <div>
+              <h3 className="text-sm font-black text-slate-800 uppercase tracking-tighter mb-1">Audit Version History</h3>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Historical Snapshots from Re-Ingestion Cycles</p>
+            </div>
+            
+            <div className="grid gap-4">
+              {[...data.versions].reverse().map((ver, idx) => (
+                <div key={idx} className="group bg-white border border-slate-100 rounded-3xl p-6 hover:shadow-xl hover:border-slate-200 transition-all border-l-4 border-l-slate-200 hover:border-l-primary">
+                  <div className="flex items-start justify-between">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 w-2 rounded-full bg-slate-300 group-hover:bg-primary transition-colors" />
+                        <span className="text-xs font-black text-slate-700">Audit Version #{data.versions!.length - idx}</span>
+                        <span className="text-[10px] font-bold text-slate-400 tabular-nums uppercase">
+                          {new Date(ver.snapshotAt).toLocaleString()}
+                        </span>
+                      </div>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.15em] ml-4">
+                        Engine: <span className="text-slate-600 font-black">{ver.ocrEngine || 'gemini'}</span> • Quality: <span className={cn(
+                          ver.extractionQuality === 'verified' ? "text-emerald-600" : "text-amber-600 font-bold"
+                        )}>{ver.extractionQuality?.replace('_', ' ')?.toUpperCase()}</span>
+                      </p>
+                    </div>
+                    
+                    <div className="flex gap-4">
+                       <MetricCard label="Transactions" value={String(ver.transactions?.length || 0)} small />
+                       <MetricCard label="Matched" value={ver.reconciliation?.matched ? 'YES' : 'NO'} color={ver.reconciliation?.matched ? 'text-emerald-600' : 'text-red-500'} small />
+                    </div>
+                  </div>
+                  
+                  {ver.summary && (
+                    <div className="mt-4 p-4 bg-slate-50/50 rounded-2xl border border-slate-100 italic text-[11px] text-slate-500 leading-relaxed line-clamp-2 hover:line-clamp-none transition-all cursor-default">
+                      "{ver.summary}"
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex justify-end">
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      onClick={() => {
+                        window.alert(`Snapshot Sequence ID: VER-${data.versions!.length - idx}\n\nHistorical extraction data for this sequence is archived. You can inspect the 'versions' field in the raw JSON payload if needed.`);
+                      }}
+                      className="text-[9px] font-bold uppercase tracking-widest text-slate-400 hover:text-primary transition-colors group"
+                    >
+                      Audit Snapshot Log <IconArrowRight size={12} className="ml-1 translate-x-0 group-hover:translate-x-1 transition-transform" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>

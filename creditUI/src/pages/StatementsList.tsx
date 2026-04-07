@@ -15,6 +15,7 @@ import {
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { txRuleKey } from "@/lib/vendorRules"
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface Statement {
@@ -27,7 +28,17 @@ interface Statement {
   availableLimit?: { val: number }
   outstandingTotal?: { val: number }
   minPaymentDue?: { val: number }
-  transactions?: { _id: string; amount: number; type: string }[]
+  transactions?: { 
+    _id: string; 
+    amount?: number; 
+    deposit?: number; 
+    withdrawal?: number; 
+    type: string; 
+    category?: string; 
+    isInternal?: boolean;
+    description?: string;
+    merchantName?: string;
+  }[]
   currency?: string
   status?: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED"
   isApproved?: boolean
@@ -84,6 +95,38 @@ function DeleteButton({ statementId, bankName }: { statementId: string; bankName
       Delete
     </Button>
   )
+}
+
+function ReIngestButton({ statementId }: { statementId: string }) {
+  const [loading, setLoading] = React.useState(false);
+  
+  const handleReIngest = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setLoading(true);
+    try {
+      await api.post(`/api/statements/${statementId}/re-ingest`);
+    } catch (err) {
+      console.error("Re-ingestion failed", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      onClick={handleReIngest}
+      disabled={loading}
+      className={cn(
+        "h-8 gap-1.5 text-xs font-bold text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg px-3 transition-all",
+        loading && "animate-pulse"
+      )}
+    >
+      {loading ? <IconLoader2 size={14} className="animate-spin" /> : <IconReceipt2 size={14} />}
+      Re-ingest
+    </Button>
+  );
 }
 
 // ── Statement Group ────────────────────────────────────────────────────────
@@ -220,7 +263,8 @@ function StatementGroup({ name, accNum, items, navigate, fmt }: GroupProps) {
                     )}
                   </div>
 
-                  <div className="col-span-2 flex justify-end pr-2" onClick={e => e.stopPropagation()}>
+                  <div className="col-span-2 flex justify-end pr-2 gap-1" onClick={e => e.stopPropagation()}>
+                    {st.status !== 'PROCESSING' && <ReIngestButton statementId={st._id} />}
                     <DeleteButton statementId={st._id} bankName={st.bankName.val} />
                   </div>
                 </div>
@@ -261,11 +305,20 @@ function StatCard({
 }
 
 // ── Main Page ──────────────────────────────────────────────────────────────
+interface VendorRuleRow {
+  merchantName: string
+  category: string
+  vendorLabel?: string
+}
+
 export default function StatementsList() {
   const [statements, setStatements] = React.useState<Statement[]>([])
   const [loading, setLoading] = React.useState(true)
   const [globalFilter, setGlobalFilter] = React.useState("")
   const [deleteDialog, setDeleteDialog] = React.useState<{id: string, name: string} | null>(null)
+  const [vendorRules, setVendorRules] = React.useState<VendorRuleRow[]>([])
+  const [spendHoverCat, setSpendHoverCat] = React.useState<string | null>(null)
+  const spendHoverLeaveTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const navigate = useNavigate()
 
   React.useEffect(() => {
@@ -296,6 +349,16 @@ export default function StatementsList() {
       if (timeoutId) clearTimeout(timeoutId);
     };
   }, []);
+
+  React.useEffect(() => {
+    api.get("/api/vendor-rules").then((res) => setVendorRules(res.data)).catch(() => {})
+  }, [])
+
+  React.useEffect(() => {
+    return () => {
+      if (spendHoverLeaveTimer.current) clearTimeout(spendHoverLeaveTimer.current)
+    }
+  }, [])
 
   React.useEffect(() => {
     const handler = (e: Event) => {
@@ -350,6 +413,89 @@ export default function StatementsList() {
   const totalMinDue = creditStatements.reduce((s, st) => s + (st.minPaymentDue?.val ?? 0), 0)
   const avgUtil = totalCreditLimit > 0 ? Math.round((totalOutstanding / totalCreditLimit) * 100) : 0
 
+  const vendorRulesByKey = React.useMemo(() => {
+    const m = new Map<string, VendorRuleRow>()
+    for (const r of vendorRules) {
+      m.set(r.merchantName.trim().toLowerCase(), r)
+    }
+    return m
+  }, [vendorRules])
+
+  // ── Portfolio Analytics Calculation ─────────────────────────────────────────
+  const portfolioAnalytics = React.useMemo(() => {
+    type Tx = NonNullable<Statement["transactions"]>[number]
+
+    const vendorLabelFor = (tx: Tx, rule: VendorRuleRow | undefined) => {
+      if (rule?.vendorLabel?.trim()) return rule.vendorLabel.trim()
+      if (tx.merchantName?.trim()) return tx.merchantName.trim()
+      const d = (tx.description || "").trim()
+      return d.length > 40 ? `${d.slice(0, 40)}…` : d || "Unknown"
+    }
+
+    const bucketKey = (tx: Tx, rule: VendorRuleRow | undefined) => {
+      if (rule?.vendorLabel?.trim()) return `tag:${rule.vendorLabel.trim().toLowerCase()}`
+      return `m:${txRuleKey(tx)}`
+    }
+
+    const mergeVendors = (cat: string) => {
+      const map = new Map<string, { label: string; amount: number }>()
+      statements.forEach((st) => {
+        if (st.status !== "COMPLETED") return
+        for (const tx of st.transactions || []) {
+          const isInternal = tx.isInternal || tx.category === "Transfer"
+          const isMerchantEMI = tx.description?.toUpperCase().includes("FP EMI")
+          if (isInternal || isMerchantEMI || tx.type !== "Debit") continue
+          const c = tx.category || "Other"
+          if (c !== cat) continue
+          const amount = tx.amount || tx.deposit || tx.withdrawal || 0
+          const rule = vendorRulesByKey.get(txRuleKey(tx))
+          const bKey = bucketKey(tx, rule)
+          const label = vendorLabelFor(tx, rule)
+          const prev = map.get(bKey)
+          if (prev) map.set(bKey, { label: prev.label, amount: prev.amount + amount })
+          else map.set(bKey, { label, amount })
+        }
+      })
+      return [...map.values()].sort((a, b) => b.amount - a.amount)
+    }
+
+    const categoriesOnly: Record<string, number> = {}
+    let inc = 0
+    let spend = 0
+    statements.forEach((st) => {
+      if (st.status !== "COMPLETED") return
+      for (const tx of st.transactions || []) {
+        const isInternal = tx.isInternal || tx.category === "Transfer"
+        const isMerchantEMI = tx.description?.toUpperCase().includes("FP EMI")
+        if (isInternal || isMerchantEMI) continue
+        const amount = tx.amount || tx.deposit || tx.withdrawal || 0
+        if (tx.type === "Credit") inc += amount
+        else if (tx.type === "Debit") {
+          spend += amount
+          const cat = tx.category || "Other"
+          categoriesOnly[cat] = (categoriesOnly[cat] || 0) + amount
+        }
+      }
+    })
+
+    const catList = Object.entries(categoriesOnly)
+      .map(([name, amount]) => ({ name, amount }))
+      .sort((a, b) => b.amount - a.amount)
+
+    const vendorsByCategory: Record<string, { label: string; amount: number }[]> = {}
+    for (const { name } of catList) {
+      vendorsByCategory[name] = mergeVendors(name)
+    }
+
+    return {
+      totalIncome: inc,
+      totalSpending: spend,
+      netFlow: inc - spend,
+      categoryList: catList,
+      vendorsByCategory,
+    }
+  }, [statements, vendorRulesByKey])
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-slate-50 gap-4">
@@ -396,6 +542,174 @@ export default function StatementsList() {
             <StatCard icon={IconAlertCircle} label="Combined Debt" value={fmt(totalOutstanding)} sub="Live aggregate" color="bg-red-50 text-red-500" />
             <StatCard icon={IconTrendingUp} label="Utilization" value={`${avgUtil}%`} sub={avgUtil >= 80 ? "Critical usage" : "Safe range"} color={avgUtil >= 80 ? "bg-red-100 text-red-600" : "bg-emerald-50 text-emerald-600"} />
             <StatCard icon={IconReceipt2} label="Upcoming Min" value={fmt(totalMinDue)} sub="Priority focus" color="bg-amber-50 text-amber-600" />
+          </div>
+        )}
+
+        {/* ── Portfolio Analytics Dashboard ──────────────────────────────────── */}
+        {statements.length > 0 && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Cash Flow Insights */}
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-white rounded-[2.5rem] border border-slate-100 p-8 shadow-sm flex flex-col h-full">
+                <div className="flex items-center justify-between mb-8">
+                  <div className="space-y-1">
+                    <h3 className="text-xl font-black text-slate-900 tracking-tight">Financial Velocity</h3>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">Net Capital Movement • Consolidated</p>
+                  </div>
+                  <div className="h-10 w-10 rounded-xl bg-slate-50 flex items-center justify-center text-slate-400">
+                    <IconTrendingUp size={20} />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-8 mb-8">
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Consolidated Income</p>
+                    <p className="text-2xl font-black text-emerald-600 tabular-nums">+{fmt(portfolioAnalytics.totalIncome)}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Portfolio Burn</p>
+                    <p className="text-2xl font-black text-red-500 tabular-nums">-{fmt(portfolioAnalytics.totalSpending).replace('₹', '')}</p>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Net Cash Flow</p>
+                    <p className={cn(
+                      "text-2xl font-black tabular-nums",
+                      portfolioAnalytics.netFlow >= 0 ? "text-primary" : "text-amber-600"
+                    )}>
+                      {portfolioAnalytics.netFlow >= 0 ? '+' : ''}{fmt(portfolioAnalytics.netFlow)}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex-1 min-h-[140px] bg-slate-50/50 rounded-3xl border border-dashed border-slate-200 flex items-center justify-center relative overflow-hidden group">
+                   <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                   <div className="text-center space-y-2 relative z-10 p-6">
+                      <p className="text-xs font-bold text-slate-500 max-w-[280px] leading-relaxed">
+                        Across All accounts, your net position this cycle is <span className={cn("px-1.5 py-0.5 rounded-lg text-white font-black", portfolioAnalytics.netFlow >= 0 ? "bg-emerald-500" : "bg-amber-500")}>
+                          {portfolioAnalytics.netFlow >= 0 ? 'Surplus' : 'Deficit'}
+                        </span>
+                      </p>
+                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-[0.2em] mt-4">Forensic Liquidity Score: <span className="text-slate-800">84/100</span></p>
+                   </div>
+                   
+                   {/* Decorative Graph Placeholder Lines */}
+                   <div className="absolute bottom-0 left-0 right-0 h-16 opacity-10 flex items-end gap-1 px-8">
+                      {[40, 70, 45, 90, 65, 80, 55, 95, 75, 85].map((h, i) => (
+                        <div key={i} className="flex-1 bg-primary rounded-t-lg transition-all duration-1000 group-hover:h-full" style={{ height: `${h}%` }} />
+                      ))}
+                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Category Intelligence */}
+            <div className="bg-white rounded-[2.5rem] border border-slate-100 p-8 shadow-sm space-y-8">
+              <div className="space-y-1">
+                <h3 className="text-xl font-black text-slate-900 tracking-tight">Spending IQ</h3>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">Categorical Attribution</p>
+                <p className="text-[10px] text-slate-400 font-medium leading-snug pt-1">
+                  Hover a category to see merchants and custom vendor tags. Set tags on any statement’s transaction row.
+                </p>
+              </div>
+
+              <div className="space-y-5">
+                {portfolioAnalytics.categoryList.length > 0 ? portfolioAnalytics.categoryList.slice(0, 6).map((cat, i) => {
+                  const pct = portfolioAnalytics.totalSpending > 0 
+                    ? Math.round((cat.amount / portfolioAnalytics.totalSpending) * 100) 
+                    : 0;
+                  const vendors = portfolioAnalytics.vendorsByCategory[cat.name] ?? []
+                  const openSpend = spendHoverCat === cat.name
+
+                  const clearSpendHoverTimer = () => {
+                    if (spendHoverLeaveTimer.current) {
+                      clearTimeout(spendHoverLeaveTimer.current)
+                      spendHoverLeaveTimer.current = null
+                    }
+                  }
+                  const onSpendCatEnter = () => {
+                    clearSpendHoverTimer()
+                    setSpendHoverCat(cat.name)
+                  }
+                  const onSpendCatLeave = () => {
+                    clearSpendHoverTimer()
+                    spendHoverLeaveTimer.current = setTimeout(() => setSpendHoverCat(null), 220)
+                  }
+                  
+                  return (
+                    <div
+                      key={cat.name}
+                      className="relative space-y-2 rounded-2xl px-1 -mx-1 transition-colors"
+                      onMouseEnter={onSpendCatEnter}
+                      onMouseLeave={onSpendCatLeave}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className={cn("h-1.5 w-1.5 rounded-full shrink-0",
+                            i === 0 ? "bg-primary" : 
+                            i === 1 ? "bg-indigo-400" :
+                            i === 2 ? "bg-amber-400" : "bg-slate-300"
+                          )} />
+                          <span className="text-xs font-bold text-slate-700 uppercase tracking-wide truncate">{cat.name}</span>
+                        </div>
+                        <span className="text-xs font-black text-slate-900 tabular-nums shrink-0">{fmt(cat.amount)}</span>
+                      </div>
+                      <div className="relative h-1.5 w-full bg-slate-50 rounded-full overflow-hidden">
+                        <div 
+                          className={cn(
+                            "absolute inset-y-0 left-0 rounded-full transition-all duration-1000",
+                            i === 0 ? "bg-primary" : 
+                            i === 1 ? "bg-indigo-400" :
+                            i === 2 ? "bg-amber-400" : "bg-slate-300"
+                          )}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-end">
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-tighter">{pct}% OF BURN</span>
+                      </div>
+
+                      {openSpend && (
+                        <div
+                          className="absolute left-0 right-0 top-full z-40 mt-1 rounded-2xl border border-slate-100 bg-white p-3 shadow-xl shadow-slate-200/60"
+                          onMouseEnter={onSpendCatEnter}
+                          onMouseLeave={onSpendCatLeave}
+                        >
+                          {vendors.length === 0 ? (
+                            <p className="text-[11px] text-slate-500 font-medium">No merchant rows found for this category.</p>
+                          ) : (
+                            <>
+                              <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">Vendors & tags</p>
+                              <ul className="max-h-44 space-y-1.5 overflow-y-auto pr-0.5">
+                                {vendors.slice(0, 10).map((v, vi) => {
+                                  const vp = cat.amount > 0 ? Math.round((v.amount / cat.amount) * 100) : 0
+                                  return (
+                                    <li key={`${v.label}-${vi}`} className="flex items-start justify-between gap-2 text-[11px]">
+                                      <span className="font-semibold text-slate-700 leading-tight break-words min-w-0">{v.label}</span>
+                                      <span className="shrink-0 text-right">
+                                        <span className="font-bold text-slate-900 tabular-nums">{fmt(v.amount)}</span>
+                                        <span className="text-[9px] font-bold text-slate-400 ml-1">{vp}%</span>
+                                      </span>
+                                    </li>
+                                  )
+                                })}
+                              </ul>
+                              {vendors.length > 10 && (
+                                <p className="text-[9px] text-slate-400 mt-2 font-medium">+{vendors.length - 10} more</p>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                }) : (
+                  <div className="py-12 flex flex-col items-center justify-center gap-2 opacity-30">
+                    <IconReceipt2 size={32} />
+                    <p className="text-[10px] font-bold uppercase">No data categorized</p>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 

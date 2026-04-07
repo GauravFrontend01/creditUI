@@ -2,15 +2,21 @@ const VendorRule = require('../models/VendorRule');
 
 const saveVendorRule = async (req, res) => {
   try {
-    const { merchantName, category } = req.body;
+    const { merchantName, category, vendorLabel } = req.body;
     if (!merchantName || !category) {
       return res.status(400).json({ message: 'merchantName and category are required' });
     }
 
+    const key = String(merchantName).trim().toLowerCase();
+    const patch = { category };
+    if (vendorLabel !== undefined) {
+      patch.vendorLabel = String(vendorLabel).trim();
+    }
+
     const rule = await VendorRule.findOneAndUpdate(
-      { user: req.user._id, merchantName },
-      { category },
-      { new: true, upsert: true }
+      { user: req.user._id, merchantName: key },
+      patch,
+      { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
     res.status(200).json(rule);

@@ -15,6 +15,7 @@ const transactionSchema = new mongoose.Schema({
   categoryConfidence: Number,
   isRecurring: Boolean,
   isForex: Boolean,
+  isInternal: Boolean,
   box: boxField,
   page: Number,
 });
@@ -22,6 +23,9 @@ const transactionSchema = new mongoose.Schema({
 const emiSchema = new mongoose.Schema({
   name: String,
   amount: Number,
+  tenure: Number,
+  paidInstallments: Number,
+  remainingInstallments: Number,
   box: boxField,
   page: Number,
 });
@@ -139,6 +143,18 @@ const statementSchema = new mongoose.Schema({
 
   createdAt: { type: Date, default: Date.now },
   rawAIResponse: { type: mongoose.Schema.Types.Mixed },
+  
+  // ── Version History ────────────────────────────────────────────────────────
+  versions: [{
+    snapshotAt: { type: Date, default: Date.now },
+    transactions: [transactionSchema],
+    emiList: [emiSchema],
+    summary: String,
+    reconciliation: mongoose.Schema.Types.Mixed,
+    extractionQuality: String,
+    ocrEngine: String,
+    rawAIResponse: mongoose.Schema.Types.Mixed
+  }],
 });
 
 module.exports = mongoose.model('Statement', statementSchema);

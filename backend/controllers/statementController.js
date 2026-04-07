@@ -114,6 +114,20 @@ exports.reprocessStatement = async (req, res) => {
       return res.status(400).json({ message: 'No AI response stored for this statement' });
     }
 
+    // Pipeline Snapshot for Version History
+    if (statement.transactions && statement.transactions.length > 0) {
+        statement.versions.push({
+          snapshotAt: new Date(),
+          transactions: statement.transactions,
+          emiList: statement.emiList,
+          summary: statement.summary,
+          reconciliation: statement.reconciliation,
+          extractionQuality: statement.extractionQuality,
+          ocrEngine: statement.ocrEngine,
+          rawAIResponse: statement.rawAIResponse
+        });
+    }
+
     if (req.body.targetType) {
       statement.type = req.body.targetType;
     }
@@ -254,3 +268,64 @@ exports.deleteManyStatements = async (req, res) => {
   }
 };
 
+// @desc    Re-ingest (Re-run AI processing)
+// @route   POST /api/statements/:id/re-ingest
+// @access  Private
+exports.reIngestStatement = async (req, res) => {
+  try {
+    const statement = await Statement.findById(req.params.id);
+
+    if (!statement || statement.user.toString() !== req.user._id.toString()) {
+      return res.status(404).json({ message: 'Statement not found' });
+    }
+
+    if (!statement.pdfFileName) {
+      return res.status(400).json({ message: 'No source PDF found in storage for re-ingestion' });
+    }
+
+    // Pipeline Snapshot for Version History
+    if (statement.transactions && statement.transactions.length > 0) {
+        statement.versions.push({
+          snapshotAt: new Date(),
+          transactions: statement.transactions,
+          emiList: statement.emiList,
+          summary: statement.summary,
+          reconciliation: statement.reconciliation,
+          extractionQuality: statement.extractionQuality,
+          ocrEngine: statement.ocrEngine,
+          rawAIResponse: statement.rawAIResponse
+        });
+    }
+
+    // 1. Fetch the PDF from Supabase Storage
+    const { data: pdfData, error: downloadError } = await supabase
+      .storage
+      .from(BUCKET)
+      .download(statement.pdfFileName);
+
+    if (downloadError) {
+      console.error('Supabase download error:', downloadError);
+      return res.status(500).json({ message: 'Failed to retrieve PDF from storage for re-processing' });
+    }
+
+    // 2. Convert Blob to Buffer
+    const arrayBuffer = await pdfData.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    // 3. Mark as PENDING and clear previous errors
+    statement.status = 'PENDING';
+    statement.processingError = undefined;
+    statement.isApproved = false; // Reset approval status
+    await statement.save();
+
+    // 4. Kick off background extraction
+    processStatement(statement._id, buffer).catch(err => {
+        console.error('Background re-ingestion process failed', err);
+    });
+
+    res.json({ message: 'Re-ingestion triggered successfully', statement });
+  } catch (error) {
+    console.error('reIngestStatement error:', error);
+    res.status(500).json({ message: 'Server error', detail: error.message });
+  }
+};

@@ -1,4 +1,4 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { VertexAI } = require("@google-cloud/vertexai");
 const axios = require("axios");
 const FormData = require("form-data");
 const { fromBuffer } = require("pdf2pic");
@@ -7,8 +7,10 @@ const path = require("path");
 const Statement = require("../models/Statement");
 const VendorRule = require("../models/VendorRule");
 
-const API_KEY = process.env.GOOGLE_API_KEY || "";
-const genAI = new GoogleGenerativeAI(API_KEY);
+const GOOGLE_PROJECT_ID = process.env.GOOGLE_PROJECT_ID || "forensic-audit-platform";
+const GOOGLE_LOCATION = process.env.GOOGLE_LOCATION || "us-central1";
+
+const vertexAI = new VertexAI({ project: GOOGLE_PROJECT_ID, location: GOOGLE_LOCATION });
 
 const { Mistral } = require('@mistralai/mistralai');
 const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
@@ -146,6 +148,13 @@ like a subscription (Netflix, Spotify, insurance, etc).
 Mark isForex: true if the transaction involves a foreign currency or 
 international merchant.
 
+RECOGNIZING INTERNAL TRANSFERS (SELF TRF):
+If the description mentions "OWN A/C", "TRF FROM", "TRF TO", "UPI / SELF", 
+"TRANSFER TO SELF", "PERSONAL TRANSFER", or includes parts of the user's 
+own name/bank accounts, mark isInternal: true and category as "Transfer".
+These are not real expenses or income, just money moving between the user's 
+own ICICI, HDFC, SBI, etc accounts.
+
 RECONCILIATION SUMMARY QUIRKS:
 1. EMI installments appear as both a credit and a debit — extract both rows separately. Do not deduplicate.
 2. Finance charges often have an internal reference suffix (e.g. FIN CHGS FOR THIS STMT...  - 20001 - 1), do NOT parse that suffix as an amount.
@@ -191,6 +200,7 @@ Return ONLY valid JSON in this exact structure:
     "categoryConfidence": number,
     "isRecurring": boolean,
     "isForex": boolean,
+    "isInternal": boolean,
     "box": [number, number, number, number],
     "page": number
   }],
@@ -198,6 +208,9 @@ Return ONLY valid JSON in this exact structure:
   "emiList": [{
     "name": string,
     "amount": number,
+    "tenure": number, // Total installments (e.g., 24)
+    "paidInstallments": number, // Number of installments paid so far (e.g., 5 of 24, extract 5)
+    "remainingInstallments": number, // Number of installments remaining (e.g., 19)
     "box": [number, number, number, number],
     "page": number
   }],
@@ -234,6 +247,13 @@ For every extracted field, provide bounding box coords in a flat array of exactl
 
 Identify the primary currency used in the statement (e.g., INR, USD).
 
+RECOGNIZING INTERNAL TRANSFERS (SELF TRF):
+If the description mentions "OWN A/C", "TRF FROM", "TRF TO", "UPI / SELF", 
+"TRANSFER TO SELF", "PERSONAL TRANSFER", or includes parts of the user's 
+own name/bank accounts, mark isInternal: true and category as "Transfer".
+These are not real expenses or income, just money moving between the user's 
+own ICICI, HDFC, SBI, etc accounts.
+
 Return ONLY valid JSON in this exact structure:
 {
   "currency": string,
@@ -258,6 +278,17 @@ Return ONLY valid JSON in this exact structure:
     "category": string,
     "categoryConfidence": number,
     "isRecurring": boolean,
+    "isInternal": boolean,
+    "box": [number, number, number, number],
+    "page": number
+  }],
+
+  "emiList": [{
+    "name": string,
+    "amount": number,
+    "tenure": number,
+    "paidInstallments": number,
+    "remainingInstallments": number,
     "box": [number, number, number, number],
     "page": number
   }],
@@ -489,6 +520,7 @@ const extractionSchema = {
           categoryConfidence: { type: "number" },
           isRecurring: { type: "boolean" },
           isForex: { type: "boolean" },
+          isInternal: { type: "boolean", description: "true if this is a transfer between user's own accounts" },
           box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
           page: { type: "number" }
         },
@@ -502,6 +534,9 @@ const extractionSchema = {
         properties: {
           name: { type: "string" },
           amount: { type: "number" },
+          tenure: { type: "number" },
+          paidInstallments: { type: "number" },
+          remainingInstallments: { type: "number" },
           box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
           page: { type: "number" }
         }
@@ -603,6 +638,7 @@ const bankExtractionSchema = {
           category: { type: "string" },
           categoryConfidence: { type: "number" },
           isRecurring: { type: "boolean" },
+          isInternal: { type: "boolean" },
           box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
           page: { type: "number" }
         }
@@ -616,6 +652,21 @@ const bankExtractionSchema = {
         totalDeposits: { type: "number", description: "SUM of all deposits/credits across ALL pages. If the PDF only gives page-wise totals, SUM them yourself into this final total." },
         totalWithdrawals: { type: "number", description: "SUM of all withdrawals/debits across ALL pages. If the PDF only gives page-wise totals, SUM them yourself into this final total." },
         transactionCount: { type: "number", description: "Total count of transaction rows extracted" }
+      }
+    },
+    emiList: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          amount: { type: "number" },
+          tenure: { type: "number" },
+          paidInstallments: { type: "number" },
+          remainingInstallments: { type: "number" },
+          box: { type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 },
+          page: { type: "number" }
+        }
       }
     },
     summary: { type: "string" }
@@ -835,7 +886,7 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
       extraction = { ...groqResult, type: 'GROQ_LLAMA_MAPPED' };
       console.log(`[Background] Groq LLM completion successful for ${statementId}`);
     } else {
-      const model = genAI.getGenerativeModel({
+      const model = vertexAI.getGenerativeModel({
         model: "gemini-2.5-flash",
         generationConfig: {
           responseMimeType: "application/json",
@@ -845,23 +896,29 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
 
       while (attempt < maxAttempts) {
         try {
-          console.log(`[Background] Gemini Extraction starting for ${statementId} (${statement.type})...`);
+          console.log(`[Background] Gemini Extraction (Vertex AI) starting for ${statementId} (${statement.type})...`);
           const startTime = Date.now();
 
-          const result = await model.generateContent([
-            activePrompt,
-            {
-              inlineData: {
-                data: pdfBuffer.toString("base64"),
-                mimeType: "application/pdf"
-              }
-            }
-          ]);
+          const result = await model.generateContent({
+            contents: [{
+              role: 'user',
+              parts: [
+                { text: activePrompt },
+                { inlineData: { data: pdfBuffer.toString("base64"), mimeType: "application/pdf" } }
+              ]
+            }]
+          });
 
           const response = await result.response;
           const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-          console.log(`[Background] Gemini Response received in ${duration}s for ${statementId}`);
-          const text = response.text();
+          console.log(`[Background] Vertex Response received in ${duration}s for ${statementId}`);
+          
+          let text = "";
+          if (response.candidates && response.candidates[0] && response.candidates[0].content && response.candidates[0].content.parts[0]) {
+             text = response.candidates[0].content.parts[0].text;
+          } else {
+             throw new Error("Empty response from Vertex AI");
+          }
 
           const cleanedText = text.replace(/```json/g, "").replace(/```/g, "").trim();
           extraction = JSON.parse(cleanedText);
@@ -898,9 +955,13 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
   } catch (error) {
     console.error(`[Background] Processing error for ${statementId}:`, error);
     try {
+      let userError = error.message;
+      if (error.status === 429 || (error.message && (error.message.includes('429') || error.message.includes('quota')))) {
+        userError = 'AI Spending Cap Exceeded (429: Too Many Requests). Please check your Vertex/Gemini billing quotas.';
+      }
       await Statement.findByIdAndUpdate(statementId, {
         status: 'FAILED',
-        processingError: error.message
+        processingError: userError
       });
     } catch (e) {
       console.error('Final error update failed', e);

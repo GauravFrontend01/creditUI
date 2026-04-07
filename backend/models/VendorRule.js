@@ -15,6 +15,11 @@ const vendorRuleSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  /** User-defined sub-label within category, e.g. "Office canteen" under Food */
+  vendorLabel: {
+    type: String,
+    default: '',
+  },
 }, { timestamps: true });
 
 // Ensure a user only has one rule per merchant

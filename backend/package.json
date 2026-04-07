@@ -13,6 +13,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@google-cloud/vertexai": "^1.10.4",
     "@google/generative-ai": "^0.24.1",
     "@mistralai/mistralai": "^2.1.2",
     "@supabase/supabase-js": "^2.100.1",
