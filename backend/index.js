@@ -9,11 +9,22 @@ const statementRoutes = require('./routes/statementRoutes');
 const vendorRuleRoutes = require('./routes/vendorRuleRoutes');
 const ocrRoutes = require('./routes/ocrRoutes');
 const mistralRoutes = require('./routes/mistralRoutes');
+const gmailRoutes = require('./routes/gmailRoutes');
 
 const app = express();
 
+// CORS must run before routes. Requests with `Authorization` trigger a preflight OPTIONS;
+// reflect the request origin so localhost:5173 ↔ localhost:5001 works in dev.
+const corsOptions = {
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  optionsSuccessStatus: 204,
+};
+app.use(cors(corsOptions));
+
 app.use(express.json());
-app.use(cors());
 
 // Routes
 app.use('/api/users', userRoutes);
@@ -21,6 +32,7 @@ app.use('/api/statements', statementRoutes);
 app.use('/api/vendor-rules', vendorRuleRoutes);
 app.use('/api/ocr', ocrRoutes);
 app.use('/api/mistral', mistralRoutes);
+app.use('/api/gmail', gmailRoutes);
 
 // Basic route
 app.get('/', (req, res) => {

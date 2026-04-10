@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { 
   IconUpload, 
   IconLock, 
@@ -8,7 +8,10 @@ import {
   IconBrain,
   IconChartBar,
   IconShieldLock,
-  IconX
+  IconX,
+  IconMail,
+  IconRefresh,
+  IconUnlink,
 } from '@tabler/icons-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,7 +20,8 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { cn } from '@/lib/utils';
 import api from '@/lib/api';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { toast } from 'sonner';
 
 const Upload = () => {
   const [dragActive, setDragActive] = useState(false);
@@ -29,7 +33,42 @@ const Upload = () => {
   const [errorHeader, setErrorHeader] = useState("");
   const [statementType, setStatementType] = useState<'CREDIT_CARD' | 'BANK'>('CREDIT_CARD');
   const [ocrEngine, setOcrEngine] = useState<'gemini' | 'ocr_space' | 'ocr_space_v1' | 'ocr_space_v2' | 'ocr_space_v3' | 'ocr_mistral' | 'groq_llama' | 'mistral_llama_hybrid'>('gemini');
+  const [gmailStatus, setGmailStatus] = useState<{ connected: boolean; email: string; lastError?: string } | null>(null);
+  const [gmailBusy, setGmailBusy] = useState(false);
+  const [gmailPdfPassword, setGmailPdfPassword] = useState('');
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const gmailOAuthToastDone = useRef(false);
+
+  const refreshGmailStatus = useCallback(async () => {
+    try {
+      const { data } = await api.get('/api/gmail/status');
+      setGmailStatus({
+        connected: data.connected,
+        email: data.email || '',
+        lastError: data.lastError || '',
+      });
+    } catch {
+      setGmailStatus({ connected: false, email: '' });
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshGmailStatus();
+  }, [refreshGmailStatus]);
+
+  useEffect(() => {
+    const g = searchParams.get('gmail');
+    if (!g || gmailOAuthToastDone.current) return;
+    gmailOAuthToastDone.current = true;
+    if (g === 'connected') toast.success('Gmail connected. You can sync statement PDFs.');
+    else if (g === 'denied') toast.message('Gmail access was not granted.');
+    else {
+      const reason = searchParams.get('reason') || 'unknown';
+      toast.error(`Gmail: ${reason}`);
+    }
+    setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -94,6 +133,60 @@ const Upload = () => {
       console.error('Upload failed', err);
       setIsUploading(false);
       setErrorHeader(err.response?.data?.message || err.message || "Auditing failed to initialize.");
+    }
+  };
+
+  const connectGmail = async () => {
+    setGmailBusy(true);
+    try {
+      const { data } = await api.get('/api/gmail/auth-url');
+      if (data?.url) window.location.href = data.url;
+      else toast.error('Could not start Gmail connection.');
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      toast.error(err.response?.data?.detail || 'Gmail OAuth is not configured on the server.');
+    } finally {
+      setGmailBusy(false);
+    }
+  };
+
+  const syncGmail = async () => {
+    setGmailBusy(true);
+    try {
+      const { data } = await api.post('/api/gmail/sync', {
+        pdfPassword: gmailPdfPassword.trim() || password.trim() || undefined,
+        statementType,
+        ocrEngine,
+        maxResults: 8,
+      });
+      const n = data.created?.length || 0;
+      if (n === 0) {
+        toast.message('No new statement PDFs found (or already imported).');
+      } else {
+        toast.success(`Queued ${n} statement(s) from Gmail.`);
+        const last = data.created[data.created.length - 1];
+        if (last?.statementId) navigate(`/statements/${last.statementId}`);
+        else navigate('/statements');
+      }
+      await refreshGmailStatus();
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { message?: string } } };
+      toast.error(err.response?.data?.message || 'Gmail sync failed.');
+    } finally {
+      setGmailBusy(false);
+    }
+  };
+
+  const disconnectGmail = async () => {
+    setGmailBusy(true);
+    try {
+      await api.post('/api/gmail/disconnect');
+      await refreshGmailStatus();
+      toast.success('Gmail disconnected.');
+    } catch {
+      toast.error('Could not disconnect Gmail.');
+    } finally {
+      setGmailBusy(false);
     }
   };
 
@@ -210,6 +303,82 @@ const Upload = () => {
               </div>
             </div>
           </div>
+
+          <Card className="rounded-[2rem] p-6 bg-muted/20 border border-primary/10 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-background shadow-sm text-primary">
+                <IconMail size={22} strokeWidth={1.5} />
+              </div>
+              <div className="space-y-1 flex-1 min-w-0">
+                <h3 className="text-sm font-bold tracking-tight">Gmail Smart Sync</h3>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  We'll scan your inbox for the latest bank or credit card statements (like Kotak, HDFC, ICICI). 
+                  The extraction engine will run automatically for any new PDFs found.
+                </p>
+                {gmailStatus?.connected && (
+                  <div className="pt-2 space-y-2">
+                    <Input
+                      type="password"
+                      placeholder="Optional: PDF password (will be saved for future statements)"
+                      className="h-10 rounded-xl text-xs bg-background border-primary/10 focus-visible:ring-primary/30"
+                      value={gmailPdfPassword}
+                      onChange={(e) => setGmailPdfPassword(e.target.value)}
+                    />
+                    <p className="text-[9px] text-muted-foreground italic px-1">
+                      * If you've synced this bank before, we'll try your last saved password.
+                    </p>
+                  </div>
+                )}
+                {gmailStatus?.connected && gmailStatus.email && (
+                  <p className="text-[11px] font-semibold text-emerald-700 truncate" title={gmailStatus.email}>
+                    Connected: {gmailStatus.email}
+                  </p>
+                )}
+                {gmailStatus?.lastError ? (
+                  <p className="text-[10px] text-amber-700 break-words">{gmailStatus.lastError}</p>
+                ) : null}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {!gmailStatus?.connected ? (
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  className="rounded-xl gap-2"
+                  disabled={gmailBusy}
+                  onClick={connectGmail}
+                >
+                  {gmailBusy ? 'Opening…' : 'Connect Gmail'}
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    type="button"
+                    variant="default"
+                    size="sm"
+                    className="rounded-xl gap-2"
+                    disabled={gmailBusy}
+                    onClick={syncGmail}
+                  >
+                    <IconRefresh size={16} />
+                    {gmailBusy ? 'Syncing…' : 'Sync from Gmail'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-xl gap-2"
+                    disabled={gmailBusy}
+                    onClick={disconnectGmail}
+                  >
+                    <IconUnlink size={16} />
+                    Disconnect
+                  </Button>
+                </>
+              )}
+            </div>
+          </Card>
 
           <div 
             className={cn(

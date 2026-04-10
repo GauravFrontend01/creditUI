@@ -329,3 +329,58 @@ exports.reIngestStatement = async (req, res) => {
     res.status(500).json({ message: 'Server error', detail: error.message });
   }
 };
+
+/**
+ * Create a statement from a PDF buffer (used by multipart upload and Gmail sync).
+ */
+exports.createStatementFromPdfBuffer = async ({
+  userId,
+  pdfBuffer,
+  originalFileName = 'statement.pdf',
+  pdfPassword = '',
+  statementType = 'CREDIT_CARD',
+  ocrEngine = 'gemini',
+}) => {
+  let pdfStorageUrl = null;
+  let pdfFileName = null;
+
+  const ext = path.extname(originalFileName) || '.pdf';
+  const safeBase = path.basename(originalFileName, ext).replace(/[^\w.\- ()\[\]]+/g, '_').slice(0, 120);
+  pdfFileName = `${userId}-${Date.now()}-${safeBase}${ext}`;
+
+  const { error: uploadError } = await supabase.storage.from(BUCKET).upload(pdfFileName, pdfBuffer, {
+    contentType: 'application/pdf',
+    upsert: false,
+  });
+
+  if (uploadError) {
+    throw new Error(`Failed to upload PDF to storage: ${uploadError.message}`);
+  }
+
+  const { data: signedData, error: signError } = await supabase.storage
+    .from(BUCKET)
+    .createSignedUrl(pdfFileName, 60 * 60 * 24 * 365);
+
+  if (!signError && signedData?.signedUrl) {
+    pdfStorageUrl = signedData.signedUrl;
+  }
+
+  const displayName = safeBase || originalFileName.replace(/\.pdf$/i, '') || 'Gmail import';
+
+  const statement = await Statement.create({
+    user: userId,
+    bankName: { val: displayName, box: [], page: 0 },
+    type: statementType,
+    status: 'PENDING',
+    ocrEngine,
+    pdfStorageUrl,
+    pdfFileName,
+    pdfPassword,
+  });
+
+  processStatement(statement._id, pdfBuffer).catch((err) => {
+    console.error('Background process spawn failed', err);
+  });
+
+  return statement;
+};
