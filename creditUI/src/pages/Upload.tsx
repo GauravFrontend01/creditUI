@@ -40,6 +40,11 @@ const Upload = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const gmailOAuthToastDone = useRef(false);
 
+  // Candidates for manual approval
+  const [candidates, setCandidates] = useState<any[]>([]);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [candidatePasswords, setCandidatePasswords] = useState<Record<string, string>>({});
+
   const refreshGmailStatus = useCallback(async () => {
     try {
       const { data } = await api.get('/api/gmail/status');
@@ -150,28 +155,62 @@ const Upload = () => {
     }
   };
 
-  const syncGmail = async () => {
+  const fetchGmailCandidates = async () => {
     setGmailBusy(true);
     try {
-      const { data } = await api.post('/api/gmail/sync', {
-        pdfPassword: gmailPdfPassword.trim() || password.trim() || undefined,
-        statementType,
-        ocrEngine,
-        maxResults: 8,
+      const { data } = await api.get('/api/gmail/candidates');
+      setCandidates(data.candidates || []);
+      // Auto-select those that aren't imported yet
+      const fresh = (data.candidates || [])
+        .filter((c: any) => !c.isImported || !c.existsInDb)
+        .map((c: any) => c.id);
+      setSelectedIds(fresh);
+      
+      // Seed passwords from saved ones
+      const passes: Record<string, string> = {};
+      data.candidates.forEach((c: any) => {
+        if (c.savedPassword) passes[c.id] = c.savedPassword;
       });
-      const n = data.created?.length || 0;
-      if (n === 0) {
-        toast.message('No new statement PDFs found (or already imported).');
+      setCandidatePasswords(passes);
+
+      if (data.candidates?.length === 0) {
+        toast.message('No statement PDFs found in your recent emails.');
       } else {
-        toast.success(`Queued ${n} statement(s) from Gmail.`);
-        const last = data.created[data.created.length - 1];
-        if (last?.statementId) navigate(`/statements/${last.statementId}`);
-        else navigate('/statements');
+        toast.success(`Found ${data.candidates.length} potential statement(s).`);
+      }
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || 'Failed to fetch email candidates.');
+    } finally {
+      setGmailBusy(false);
+    }
+  };
+
+  const syncSelectedCandidates = async () => {
+    if (selectedIds.length === 0) return;
+    setGmailBusy(true);
+    try {
+      const selections = candidates
+        .filter(c => selectedIds.includes(c.id))
+        .map(c => ({
+          messageId: c.messageId,
+          filename: c.filename,
+          password: candidatePasswords[c.id] || '',
+          statementType,
+          ocrEngine,
+        }));
+
+      const { data } = await api.post('/api/gmail/sync-selected', { selections });
+      const n = data.created?.length || 0;
+      if (n > 0) {
+        toast.success(`Successfully queued ${n} statement(s) for extraction.`);
+        setCandidates([]); // Clear candidates after successful sync
+        navigate('/statements');
+      } else if (data.errors?.length > 0) {
+        toast.error(`Failed to sync: ${data.errors[0].error}`);
       }
       await refreshGmailStatus();
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Gmail sync failed.');
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || 'Sync failed.');
     } finally {
       setGmailBusy(false);
     }
@@ -185,6 +224,20 @@ const Upload = () => {
       toast.success('Gmail disconnected.');
     } catch {
       toast.error('Could not disconnect Gmail.');
+    } finally {
+      setGmailBusy(false);
+    }
+  };
+
+  const resetGmailSync = async () => {
+    if (!confirm('This will clear your sync history, allowing you to re-import statements even if they were previously synced. Continue?')) return;
+    setGmailBusy(true);
+    try {
+      await api.post('/api/gmail/reset');
+      toast.success('Sync history cleared.');
+      await refreshGmailStatus();
+    } catch {
+      toast.error('Could not reset sync history.');
     } finally {
       setGmailBusy(false);
     }
@@ -357,18 +410,29 @@ const Upload = () => {
                     type="button"
                     variant="default"
                     size="sm"
-                    className="rounded-xl gap-2"
+                    className="rounded-xl gap-2 h-10 px-6 font-bold shadow-lg shadow-primary/10"
                     disabled={gmailBusy}
-                    onClick={syncGmail}
+                    onClick={fetchGmailCandidates}
                   >
-                    <IconRefresh size={16} />
-                    {gmailBusy ? 'Syncing…' : 'Sync from Gmail'}
+                    <IconRefresh size={18} className={cn(gmailBusy && "animate-spin")} />
+                    {gmailBusy ? 'Scanning…' : 'Scan Gmail Inbox'}
                   </Button>
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="rounded-xl gap-2"
+                    className="rounded-xl gap-2 h-10 px-4 text-muted-foreground border-dashed"
+                    disabled={gmailBusy}
+                    onClick={resetGmailSync}
+                    title="Clear sync history"
+                  >
+                    Reset
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="rounded-xl gap-2 h-10 px-4"
                     disabled={gmailBusy}
                     onClick={disconnectGmail}
                   >
@@ -378,6 +442,79 @@ const Upload = () => {
                 </>
               )}
             </div>
+
+            {/* Candidate List Section */}
+            {candidates.length > 0 && (
+              <div className="pt-6 border-t border-primary/5 space-y-4 animate-in slide-in-from-top-4">
+                <div className="flex items-center justify-between px-1">
+                  <h4 className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Found in Inbox</h4>
+                  <Badge variant="outline" className="text-[9px] rounded-full border-primary/10">{candidates.length} items</Badge>
+                </div>
+                
+                <div className="space-y-2 max-h-[320px] overflow-y-auto pr-2 custom-scrollbar">
+                  {candidates.map((c) => {
+                    const isSelected = selectedIds.includes(c.id);
+                    return (
+                      <div 
+                        key={c.id} 
+                        className={cn(
+                          "group p-3 rounded-2xl border transition-all duration-300",
+                          isSelected ? "bg-white border-primary/20 shadow-sm" : "bg-muted/30 border-transparent grayscale-[0.6] opacity-70"
+                        )}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div 
+                            className={cn(
+                              "w-5 h-5 rounded-md border flex items-center justify-center cursor-pointer transition-colors mt-0.5",
+                              isSelected ? "bg-primary border-primary text-white" : "border-muted-foreground/30 bg-background"
+                            )}
+                            onClick={() => {
+                              setSelectedIds(prev => 
+                                isSelected ? prev.filter(id => id !== c.id) : [...prev, c.id]
+                              );
+                            }}
+                          >
+                            {isSelected && <div className="w-2.5 h-1.5 border-l-2 border-b-2 -rotate-45 translate-y-[-1px] border-white" />}
+                          </div>
+                          
+                          <div className="flex-1 min-w-0 space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[13px] font-bold truncate leading-none">{c.subject}</span>
+                              <Badge variant="secondary" className="text-[9px] font-bold h-4 rounded-full bg-primary/5 text-primary border-0">{c.bank}</Badge>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground truncate">{c.filename}</p>
+                            
+                            {c.encrypted && isSelected && (
+                              <div className="pt-2">
+                                <Input
+                                  type="password"
+                                  placeholder="PDF Password Required"
+                                  className="h-8 text-[11px] rounded-lg bg-muted/50 border-primary/10 focus-visible:ring-primary/20"
+                                  value={candidatePasswords[c.id] || ''}
+                                  onChange={(e) => setCandidatePasswords(prev => ({ ...prev, [c.id]: e.target.value }))}
+                                />
+                                {c.savedPassword && !candidatePasswords[c.id] && (
+                                  <p className="text-[9px] text-emerald-600 mt-1 pl-1">✓ Using saved password</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <Button 
+                  className="w-full h-12 rounded-xl text-xs font-bold gap-2"
+                  disabled={selectedIds.length === 0 || gmailBusy}
+                  onClick={syncSelectedCandidates}
+                >
+                  <IconBrain size={16} />
+                  {gmailBusy ? 'Processing...' : `Audit Selected (${selectedIds.length})`}
+                </Button>
+              </div>
+            )}
           </Card>
 
           <div 

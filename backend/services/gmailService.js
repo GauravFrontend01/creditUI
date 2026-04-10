@@ -1,4 +1,19 @@
 const { google } = require('googleapis');
+const { PDFDocument } = require('pdf-lib');
+
+/**
+ * Check if a PDF buffer is password protected
+ * @param {Buffer} buffer 
+ */
+async function isPdfEncrypted(buffer) {
+  try {
+    await PDFDocument.load(buffer, { ignoreEncryption: false });
+    return false;
+  } catch (err) {
+    if (err.message.includes('encrypted')) return true;
+    return false;
+  }
+}
 
 function createOAuth2Client() {
   const cid = process.env.GOOGLE_CLIENT_ID;
@@ -120,5 +135,6 @@ module.exports = {
   collectPdfParts,
   extractPdfAttachments,
   defaultGmailQuery,
+  isPdfEncrypted,
   google,
 };

@@ -340,6 +340,7 @@ exports.createStatementFromPdfBuffer = async ({
   pdfPassword = '',
   statementType = 'CREDIT_CARD',
   ocrEngine = 'gemini',
+  gmailMessageId = null,
 }) => {
   let pdfStorageUrl = null;
   let pdfFileName = null;
@@ -376,6 +377,7 @@ exports.createStatementFromPdfBuffer = async ({
     pdfStorageUrl,
     pdfFileName,
     pdfPassword,
+    gmailMessageId,
   });
 
   processStatement(statement._id, pdfBuffer).catch((err) => {

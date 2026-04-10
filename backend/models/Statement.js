@@ -140,6 +140,7 @@ const statementSchema = new mongoose.Schema({
     enum: ['gemini', 'ocr_space', 'ocr_space_v1', 'ocr_space_v2', 'ocr_space_v3', 'ocr_mistral', 'groq_llama', 'mistral_llama_hybrid'],
     default: 'gemini'
   },
+  gmailMessageId: { type: String, index: true },
 
   createdAt: { type: Date, default: Date.now },
   rawAIResponse: { type: mongoose.Schema.Types.Mixed },
