@@ -11,15 +11,8 @@ if (typeof DOMMatrix === 'undefined') {
 
 const pdfjs = require('pdfjs-dist/legacy/build/pdf.mjs');
 
-/**
- * Decrypts a PDF buffer using the provided password.
- * Returns the decrypted buffer.
- * @param {Buffer} buffer 
- * @param {string} password 
- * @returns {Promise<Buffer>}
- */
 async function decryptPdf(buffer, password) {
-  if (!password) return buffer;
+  if (!password) return { buffer, isUnlocked: true };
   const trimmedPassword = password.trim();
 
   // Verify magic bytes (%PDF-)
@@ -34,13 +27,12 @@ async function decryptPdf(buffer, password) {
       password: trimmedPassword,
       ignoreEncryption: false 
     });
-    // Saving the loaded document produces a version without the encryption dictionaries
     const decryptedUint8Array = await pdfDoc.save();
-    return Buffer.from(decryptedUint8Array);
+    return { buffer: Buffer.from(decryptedUint8Array), isUnlocked: true };
   } catch (err) {
-    console.error(`[PDF Service] Primary decryption error (len=${trimmedPassword.length}):`, err.message);
+    console.warn(`[PDF Service] Primary decryption (pdf-lib) failed: ${err.message}. Trying verification fallback...`);
     
-    // Fallback: Verify with pdfjs-dist (supports modern encryption)
+    // Fallback: Verify with pdfjs-dist (supports modern AES-256 encryption)
     try {
       const loadingTask = pdfjs.getDocument({
         data: new Uint8Array(buffer),
@@ -49,11 +41,12 @@ async function decryptPdf(buffer, password) {
       });
       await loadingTask.promise;
       
-      // If we are here, the password is CORRECT, but pdf-lib (Revision 4 library) failed.
-      console.warn(`[PDF Service] Password IS correct (verified via pdfjs), but library limitation prevents saving unlocked version.`);
-      throw new Error('This PDF uses high-security AES-256 encryption. We can verify your password is correct, but we currently cannot "unlock" a downloadable copy for you. However, you can proceed to "Audit Selected" and we will attempt text extraction.');
+      // Password is CORRECT, but library cannot "save" it unlocked (AES-256).
+      // Return original buffer and indicate it is still encrypted but verified.
+      console.log(`[PDF Service] Password verified via pdfjs. Returning source buffer (isUnlocked: false).`);
+      return { buffer, isUnlocked: false };
     } catch (verifErr) {
-       console.error(`[PDF Service] Verification fallback failed (type=${verifErr.name}):`, verifErr.message);
+       console.error(`[PDF Service] Verification fallback failed (type=${verifErr.name}): ${verifErr.message}`);
        if (verifErr.name === 'PasswordException' || verifErr.message.toLowerCase().includes('password')) {
          throw new Error('Incorrect password for PDF decryption.');
        }

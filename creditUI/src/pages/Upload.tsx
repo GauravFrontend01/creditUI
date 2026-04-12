@@ -23,6 +23,10 @@ import { cn } from '@/lib/utils';
 import api from '@/lib/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
+import * as pdfjsLib from "pdfjs-dist";
+import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 const Upload = () => {
   const [dragActive, setDragActive] = useState(false);
@@ -223,22 +227,45 @@ const Upload = () => {
       toast.loading(`Unlocking ${candidate.filename}...`, { id: 'preview-unlock' });
       const response = await api.post('/api/gmail/preview-unlocked', {
         messageId: candidate.messageId,
-        filename: candidate.filename,
-        password
-      }, { responseType: 'blob' });
+        filename: candidate.filename
+      }, { responseType: 'arraybuffer' });
       
-      const blob = new Blob([response.data], { type: 'application/pdf' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `preview_${candidate.filename}`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-      toast.success('Successfully unlocked and downloaded preview.', { id: 'preview-unlock' });
+      const buf = response.data;
+      console.log(`[Preview] Fetched attachment from Gmail: ${candidate.filename} (${buf.byteLength} bytes)`);
+
+      const pdf = await pdfjsLib.getDocument({ 
+        data: buf,
+        password: password || undefined
+      }).promise;
+      console.log(`[Preview] Frontend unlock successful. Pages: ${pdf.numPages}`);
+
+      const imgs: string[] = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const vp = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d')!;
+        canvas.width = vp.width; canvas.height = vp.height;
+        await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
+        imgs.push(canvas.toDataURL('image/webp', 0.8));
+      }
+      console.log(`[Preview] Generated ${imgs.length} page images.`);
+
+      // Store in session for preview
+      sessionStorage.setItem('preview_pdf_images', JSON.stringify(imgs));
+      sessionStorage.setItem('preview_pdf_name', candidate.filename);
+      sessionStorage.setItem('preview_pdf_password', password);
+      sessionStorage.setItem('preview_gmail_data', JSON.stringify({
+        messageId: candidate.messageId,
+        filename: candidate.filename,
+        bank: candidate.bank
+      }));
+      console.log(`[Preview] Metadata stored in sessionStorage for /statements/preview`);
+
+      toast.success('Ready for audit preview.', { id: 'preview-unlock' });
+      navigate('/statements/preview');
     } catch (e: any) {
-      console.error(e);
+      console.error('[Preview] Failed to process candidate:', e);
       toast.error('Unlock failed. Please check the password.', { id: 'preview-unlock' });
     }
   };
@@ -267,6 +294,57 @@ const Upload = () => {
       toast.error('Could not reset sync history.');
     } finally {
       setGmailBusy(false);
+    }
+  };
+
+  const handlePreviewFile = async () => {
+    if (files.length === 0) return;
+    try {
+      toast.loading(`Preparing preview for ${files[0].name}...`, { id: 'preview-staged' });
+      const arrayBuffer = await files[0].arrayBuffer();
+      console.log(`[Preview] Manual file read: ${files[0].name} (${files[0].size} bytes)`);
+      
+      let buf = arrayBuffer;
+      console.log(`[Preview] Starting frontend unlock for manual file...`);
+      const pdf = await pdfjsLib.getDocument({ 
+        data: buf,
+        password: password || undefined
+      }).promise;
+      console.log(`[Preview] Unlock successful. Pages: ${pdf.numPages}`);
+
+      const imgs: string[] = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const vp = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d')!;
+        canvas.width = vp.width; canvas.height = vp.height;
+        await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
+        imgs.push(canvas.toDataURL('image/webp', 0.8));
+      }
+      console.log(`[Preview] Generated ${imgs.length} page images.`);
+
+      // Store for preview
+      sessionStorage.setItem('preview_pdf_images', JSON.stringify(imgs));
+      sessionStorage.setItem('preview_pdf_name', files[0].name);
+      sessionStorage.setItem('preview_pdf_password', password);
+      // For manual upload, we store the file itself as base64 in session
+      const reader = new FileReader();
+      reader.onload = () => {
+        console.log(`[Preview] Storing manual PDF b64 and metadata in sessionStorage`);
+        sessionStorage.setItem('preview_pdf_base64', reader.result as string);
+        sessionStorage.setItem('preview_manual_data', JSON.stringify({
+          statementType,
+          ocrEngine,
+          name: files[0].name
+        }));
+        toast.success('Ready for audit preview.', { id: 'preview-staged' });
+        navigate('/statements/preview');
+      };
+      reader.readAsDataURL(files[0]);
+    } catch (e: any) {
+      console.error('[Preview] Failed to process manual file:', e);
+      toast.error('Preview failed. ' + (e.message || 'Check password'), { id: 'preview-staged' });
     }
   };
 
@@ -397,10 +475,10 @@ const Upload = () => {
                 </p>
                 {gmailStatus?.connected && (
                   <div className="pt-2 space-y-2">
-                    <Input
+                    <input
                       type="password"
                       placeholder="Optional: PDF password (will be saved for future statements)"
-                      className="h-10 rounded-xl text-xs bg-background border-primary/10 focus-visible:ring-primary/30"
+                      className="flex h-10 w-full rounded-xl border border-primary/10 bg-background px-3 py-2 text-xs ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
                       value={gmailPdfPassword}
                       onChange={(e) => setGmailPdfPassword(e.target.value)}
                     />
@@ -513,10 +591,10 @@ const Upload = () => {
                             
                             {c.encrypted && isSelected && (
                               <div className="pt-2">
-                                <Input
+                                <input
                                   type="password"
                                   placeholder="PDF Password Required"
-                                  className="h-8 text-[11px] rounded-lg bg-muted/50 border-primary/10 focus-visible:ring-primary/20"
+                                  className="flex h-8 w-full rounded-lg border border-primary/10 bg-muted/50 px-3 py-2 text-[11px] ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50"
                                   value={candidatePasswords[c.id] || ''}
                                   onChange={(e) => setCandidatePasswords(prev => ({ ...prev, [c.id]: e.target.value }))}
                                 />
@@ -624,10 +702,10 @@ const Upload = () => {
                     <span>Secure Access Required</span>
                   </div>
                   <div className="relative">
-                    <Input 
+                    <input 
                       type="password"
                       placeholder="Enter statement password..."
-                      className="bg-background border-0 h-14 pl-12 pr-4 rounded-2xl shadow-sm focus-visible:ring-primary/20"
+                      className="flex h-14 w-full rounded-2xl border-0 bg-background px-3 py-2 pl-12 pr-4 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20 disabled:cursor-not-allowed disabled:opacity-50 shadow-sm"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                     />
@@ -640,13 +718,24 @@ const Upload = () => {
                 </div>
               )}
 
-              <Button 
-                onClick={startUpload}
-                disabled={isUploading || (isEncrypted && !password)}
-                className="w-full h-16 rounded-2xl text-lg font-semibold bg-primary hover:bg-primary/90 transition-all active:scale-[0.98]"
-              >
-                {isUploading ? 'Executing Neural Audit...' : 'Start Audit Engine'}
-              </Button>
+              <div className="flex flex-col gap-3">
+                 <Button 
+                    onClick={handlePreviewFile}
+                    variant="outline"
+                    className="w-full h-14 rounded-2xl text-xs font-bold gap-2 border-primary/20 hover:bg-primary/5"
+                 >
+                    <IconChartBar size={18} />
+                    Preview Staged Audit
+                 </Button>
+
+                 <Button 
+                    onClick={startUpload}
+                    disabled={isUploading || (isEncrypted && !password)}
+                    className="w-full h-16 rounded-2xl text-lg font-semibold bg-primary hover:bg-primary/90 transition-all active:scale-[0.98]"
+                 >
+                    {isUploading ? 'Executing Neural Audit...' : 'Start Audit Engine'}
+                 </Button>
+              </div>
 
               {errorHeader && <p className="text-red-500 font-bold text-center text-xs mt-4">{errorHeader}</p>}
             </Card>
@@ -656,7 +745,7 @@ const Upload = () => {
             <div className="space-y-4 animate-in fade-in">
               <div className="flex justify-between text-sm font-medium">
                 <span className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                  <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
                   Neural Extraction in Progress
                 </span>
                 <span>{Math.round(uploadProgress)}%</span>

@@ -500,17 +500,11 @@ exports.previewGmailPdf = async (req, res) => {
 
     if (!match) return res.status(404).json({ message: 'Attachment not found' });
     
-    console.log(`[Preview] Processing attachment: ${match.filename} (${match.buffer.length} bytes)`);
+    console.log(`[Preview] Retrived raw attachment: ${match.filename} (${match.buffer.length} bytes)`);
 
-    try {
-      const unlocked = await decryptPdf(match.buffer, password);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="preview_${filename}"`);
-      res.send(unlocked);
-    } catch (e) {
-      console.error('Preview decryption failed', e);
-      res.status(400).json({ message: e.message || 'Incorrect password for this PDF.' });
-    }
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="preview_${filename}"`);
+    res.send(match.buffer);
   } catch (error) {
     console.error('previewGmailPdf error:', error);
     res.status(500).json({ message: 'Internal server error during preview' });

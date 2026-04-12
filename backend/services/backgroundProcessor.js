@@ -847,6 +847,8 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
     const activeSchema = isBank ? bankExtractionSchema : extractionSchema;
     const ocrEngine = statement.ocrEngine || 'gemini';
 
+    console.log(`[Background] Starting engine: ${ocrEngine} for statement: ${statementId} (${isBank ? 'BANK' : 'CREDIT_CARD'})`);
+
     // ── PDF Unlock Layer ─────────────────────────────────────────────────────
     let activeBuffer = pdfBuffer;
     let fallbackText = null;
@@ -854,16 +856,18 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
     if (statement.pdfPassword) {
       try {
         console.log(`[Background] Unlocking encrypted statement ${statementId}...`);
-        activeBuffer = await decryptPdf(pdfBuffer, statement.pdfPassword);
-        console.log(`[Background] Statement ${statementId} unlocked successfully.`);
-      } catch (e) {
-        if (e.message.includes('AES-256')) {
-           console.warn(`[Background] AES-256 detected for ${statementId}. Using PDF.js Text Fallback.`);
+        const result = await decryptPdf(pdfBuffer, statement.pdfPassword);
+        activeBuffer = result.buffer;
+        
+        if (!result.isUnlocked) {
+           console.warn(`[Background] AES-256/High Security detected for ${statementId}. Using PDF.js Text Fallback.`);
            fallbackText = await extractTextWithPdfJs(pdfBuffer, statement.pdfPassword);
         } else {
-           console.error(`[Background] Unlock failed for ${statementId}:`, e.message);
-           throw new Error(`Failed to unlock PDF. Please verify the password. Details: ${e.message}`);
+           console.log(`[Background] Statement ${statementId} unlocked successfully.`);
         }
+      } catch (e) {
+        console.error(`[Background] Unlock failed for ${statementId}:`, e.message);
+        throw new Error(`Failed to unlock PDF. Please verify the password. Details: ${e.message}`);
       }
     }
 

@@ -417,14 +417,14 @@ exports.downloadUnlockedPdf = async (req, res) => {
     
     // 2. Decrypt
     try {
-      const unlockedBuffer = await decryptPdf(buffer, statement.pdfPassword);
+      const result = await decryptPdf(buffer, statement.pdfPassword);
       
       const safeName = (statement.bankName?.val || 'statement')
-        .replace(/[^\w.-]+/g, '_') + '_unlocked.pdf';
+        .replace(/[^\w.-]+/g, '_') + (result.isUnlocked ? '_unlocked.pdf' : '_verified.pdf');
 
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
-      res.send(unlockedBuffer);
+      res.send(result.buffer);
     } catch (e) {
       console.error('Decryption failed for download', e);
       res.status(400).json({ message: 'Could not unlock PDF with stored password' });

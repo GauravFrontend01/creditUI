@@ -8,7 +8,7 @@ import {
   IconReceipt2, IconChartBar, IconCreditCard, IconCalendar,
   IconTrendingDown, IconTrendingUp, IconGift, IconShieldCheck, IconAlertTriangle, IconShieldX,
   IconArrowUp, IconArrowDown, IconArrowsUpDown, IconCheck, IconX, IconEqual, IconPlus, IconMinus, IconMath,
-  IconTerminal2, IconPlayerPlay, IconHistory, IconArrowRight
+  IconTerminal2, IconPlayerPlay, IconHistory, IconArrowRight, IconBrain
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -444,6 +444,9 @@ function Statement() {
   const [showVault, setShowVault] = useState(false);
   const [injectedJson, setInjectedJson] = useState('');
   const [vendorRules, setVendorRules] = useState<VendorRuleRow[]>([])
+  const [isPreview, setIsPreview] = useState(false)
+  const [previewData, setPreviewData] = useState<any>(null)
+  const [sendingToAI, setSendingToAI] = useState(false)
 
   const { id } = useParams()
   const navigate = useNavigate()
@@ -457,6 +460,41 @@ function Statement() {
     let pollInterval: any = null;
 
     const load = async () => {
+      if (id === 'preview') {
+        console.log("[Statement] Entered PREVIEW mode via /statements/preview");
+        setIsPreview(true)
+        const imgs = sessionStorage.getItem('preview_pdf_images')
+        const name = sessionStorage.getItem('preview_pdf_name')
+        const gmailData = sessionStorage.getItem('preview_gmail_data')
+        const manualData = sessionStorage.getItem('preview_manual_data')
+        const password = sessionStorage.getItem('preview_pdf_password')
+
+        console.log(`[Statement] Preview assets found: ${imgs ? JSON.parse(imgs).length : 0} images, name: ${name}, hasPassword: ${!!password}`);
+        
+        if (imgs) {
+          setPages(JSON.parse(imgs))
+          setData({
+            _id: 'preview',
+            bankName: { val: name || 'Preview Statement', box: [], page: 0 },
+            transactions: [],
+            emiList: [],
+            status: 'COMPLETED',
+            currency: 'INR'
+          })
+          if (gmailData) {
+            console.log("[Statement] Gmail candidate data detected for preview audit");
+            setPreviewData(JSON.parse(gmailData));
+          }
+          if (manualData) {
+            const parsed = JSON.parse(manualData);
+            if (parsed.statementType) setForensicType(parsed.statementType);
+          }
+        } else {
+          navigate('/upload')
+        }
+        return;
+      }
+
       if (id) {
         setIsSavedView(true)
         try {
@@ -725,6 +763,77 @@ function Statement() {
     }
   };
 
+  const handleSendToAI = async () => {
+    setSendingToAI(true);
+    try {
+      const gmailData = sessionStorage.getItem('preview_gmail_data');
+      const manualData = sessionStorage.getItem('preview_manual_data');
+      const password = sessionStorage.getItem('preview_pdf_password') || '';
+      console.log(`[Statement] Initiating AI Extraction. Type: ${forensicType}, Source: ${gmailData ? 'Gmail' : manualData ? 'Manual' : 'Unknown'}`);
+
+      if (gmailData) {
+        const parsed = JSON.parse(gmailData);
+        console.log(`[Statement] Syncing Gmail PDF: ${parsed.filename}`);
+        const { data: syncRes } = await api.post('/api/gmail/sync-selected', {
+          selections: [{
+            messageId: parsed.messageId,
+            filename: parsed.filename,
+            password: password,
+            statementType: forensicType,
+            ocrEngine: 'gemini',
+          }]
+        });
+
+        if (syncRes.created?.length > 0) {
+          const newId = syncRes.created[0]._id;
+          console.log(`[Statement] Sync successful. Redirecting to background extraction node: ${newId}`);
+          clearPreviewSession();
+          navigate(`/statements/${newId}`);
+        } else {
+          console.error("[Statement] Sync failed - no statement created", syncRes);
+          setToast({ message: "Sync failed", visible: true, type: 'error' });
+        }
+      } else if (manualData) {
+        const parsed = JSON.parse(manualData);
+        console.log(`[Statement] Uploading manual PDF for AI audit: ${parsed.name}`);
+        const b64 = sessionStorage.getItem('preview_pdf_base64');
+        if (!b64) throw new Error("File data lost");
+
+        // Convert base64 to blob/file
+        const res = await fetch(b64);
+        const blob = await res.blob();
+        const file = new File([blob], parsed.name, { type: 'application/pdf' });
+
+        const formData = new FormData();
+        formData.append('pdf', file);
+        formData.append('statementType', forensicType);
+        formData.append('ocrEngine', 'gemini');
+        if (password) formData.append('pdfPassword', password);
+
+        const { data } = await api.post('/api/statements', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        
+        clearPreviewSession();
+        navigate(`/statements/${data._id}`);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setToast({ message: err.response?.data?.message || err.message || "Audit failed to start", visible: true, type: 'error' });
+    } finally {
+      setSendingToAI(false);
+    }
+  };
+
+  const clearPreviewSession = () => {
+    sessionStorage.removeItem('preview_pdf_images');
+    sessionStorage.removeItem('preview_pdf_name');
+    sessionStorage.removeItem('preview_pdf_password');
+    sessionStorage.removeItem('preview_gmail_data');
+    sessionStorage.removeItem('preview_manual_data');
+    sessionStorage.removeItem('preview_pdf_base64');
+  }
+
 
 
   const handleDownloadUnlocked = async () => {
@@ -991,7 +1100,63 @@ function Statement() {
       </div>
 
       {/* ── RIGHT: Data Panel ─────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col bg-white overflow-hidden h-full">
+      <div className="flex-1 flex flex-col bg-white overflow-hidden h-full relative">
+        {isPreview && (
+          <div className="absolute inset-0 z-50 bg-white/80 backdrop-blur-md flex flex-col items-center justify-center p-12 text-center animate-in fade-in duration-500">
+             <div className="w-24 h-24 rounded-[2rem] bg-primary/10 flex items-center justify-center text-primary mb-8 animate-bounce duration-[3s]">
+                <IconBrain size={48} strokeWidth={1.5} />
+             </div>
+             <h2 className="text-4xl font-black text-slate-900 tracking-tight mb-4">Audit Staged</h2>
+             <p className="text-slate-500 max-w-md mb-12 text-lg font-medium leading-relaxed">
+               We have successfully unlocked <span className="text-primary font-bold">"{data.bankName?.val}"</span>. 
+               Review the pages on the left. Click below to initiate neural extraction.
+             </p>
+
+             <div className="flex flex-col gap-4 w-full max-w-sm">
+                <div className="flex bg-slate-100 p-1 rounded-2xl gap-1 border border-slate-200/50 mb-4">
+                  <button
+                    onClick={() => setForensicType('CREDIT_CARD')}
+                    className={cn(
+                      "flex-1 py-3 rounded-xl text-xs font-black tracking-widest transition-all uppercase",
+                      forensicType === 'CREDIT_CARD' ? "bg-white shadow-sm text-slate-900" : "text-slate-400 hover:text-slate-600"
+                    )}
+                  >
+                    Credit Card
+                  </button>
+                  <button
+                    onClick={() => setForensicType('BANK')}
+                    className={cn(
+                      "flex-1 py-3 rounded-xl text-xs font-black tracking-widest transition-all uppercase",
+                      forensicType === 'BANK' ? "bg-white shadow-sm text-slate-900" : "text-slate-400 hover:text-slate-600"
+                    )}
+                  >
+                    Bank Account
+                  </button>
+                </div>
+
+                <Button 
+                  onClick={handleSendToAI}
+                  disabled={sendingToAI}
+                  className="h-20 rounded-[2rem] bg-primary hover:bg-primary/90 text-xl font-black uppercase tracking-[0.2em] shadow-2xl shadow-primary/30 transition-all hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  {sendingToAI ? (
+                    <div className="flex items-center gap-3">
+                      <IconLoader2 size={24} className="animate-spin" />
+                      Starting...
+                    </div>
+                  ) : "Send to Gemini"}
+                </Button>
+                
+                <Button 
+                  variant="ghost" 
+                  onClick={() => navigate('/upload')}
+                  className="text-slate-400 font-bold hover:text-slate-600"
+                >
+                  Cancel & Go Back
+                </Button>
+             </div>
+          </div>
+        )}
 
         {/* Stat bar */}
         <div className="shrink-0 px-6 py-4 border-b bg-white">
