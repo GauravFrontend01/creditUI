@@ -516,24 +516,35 @@ export default function StatementsList() {
               {statements.length} forensic statement audits active
             </p>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="relative group">
-              <IconSearch size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary transition-colors" />
-              <input
-                type="text"
-                placeholder="Search audit trail..."
-                value={globalFilter}
-                onChange={(e) => setGlobalFilter(e.target.value)}
-                className="h-12 w-80 pl-11 pr-4 bg-white border border-slate-200 rounded-2xl shadow-sm text-sm font-bold placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/30 transition-all"
-              />
+            <div className="flex items-center gap-4">
+              <div className="relative group">
+                <IconSearch size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-primary transition-colors" />
+                <input
+                  type="text"
+                  placeholder="Search audit trail..."
+                  value={globalFilter}
+                  onChange={(e) => setGlobalFilter(e.target.value)}
+                  className="h-12 w-80 pl-11 pr-4 bg-white border border-slate-200 rounded-2xl shadow-sm text-sm font-bold placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/30 transition-all"
+                />
+              </div>
+              {statements.length > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={() => setDeleteDialog({ id: 'all', name: 'ALL STATEMENTS' })}
+                  className="rounded-2xl px-4 h-12 border-slate-200 text-slate-400 hover:text-red-500 hover:bg-red-50 hover:border-red-100 transition-all shadow-sm"
+                  title="Bulk Delete All"
+                >
+                  <IconTrash size={18} />
+                </Button>
+              )}
+              <Button
+                onClick={() => navigate("/")}
+                className="rounded-2xl px-6 h-12 gap-2 shadow-lg shadow-primary/20 font-black text-sm uppercase tracking-wider"
+              >
+                <IconPlus size={18} strokeWidth={3} /> New Audit
+              </Button>
             </div>
-            <Button
-              onClick={() => navigate("/")}
-              className="rounded-2xl px-6 h-12 gap-2 shadow-lg shadow-primary/20 font-black text-sm uppercase tracking-wider"
-            >
-              <IconPlus size={18} strokeWidth={3} /> New Audit
-            </Button>
-          </div>
+    
         </div>
 
         {statements.length > 0 && (
@@ -748,27 +759,34 @@ export default function StatementsList() {
                   This forensic evidence will be unrecoverable.
                 </p>
               </div>
-              <div className="flex gap-3 w-full">
-                <Button variant="outline" className="flex-1 h-12 rounded-xl font-bold text-slate-500 border-slate-200" onClick={() => setDeleteDialog(null)}>Cancel</Button>
-                <Button 
-                  className="flex-1 h-12 rounded-xl font-bold bg-red-500 hover:bg-red-600 border-0" 
-                  onClick={async () => {
-                    const id = deleteDialog.id;
-                    setDeleteDialog(null);
-                    try {
-                      await api.delete(`/api/statements/${id}`);
-                      window.dispatchEvent(new CustomEvent('statement-deleted', { detail: id }));
-                    } catch (err) {
-                      console.error("Delete failed", err);
-                    }
-                  }}
-                >
-                  Delete Now
-                </Button>
+                  <div className="flex gap-3 w-full">
+                    <Button variant="outline" className="flex-1 h-12 rounded-xl font-bold text-slate-500 border-slate-200" onClick={() => setDeleteDialog(null)}>Cancel</Button>
+                    <Button 
+                      className="flex-1 h-12 rounded-xl font-bold bg-red-500 hover:bg-red-600 border-0" 
+                      onClick={async () => {
+                        const id = deleteDialog.id;
+                        setDeleteDialog(null);
+                        try {
+                          if (id === 'all') {
+                            const ids = statements.map(s => s._id);
+                            await api.post("/api/statements/bulk-delete", { ids });
+                            setStatements([]);
+                          } else {
+                            await api.delete(`/api/statements/${id}`);
+                            window.dispatchEvent(new CustomEvent('statement-deleted', { detail: id }));
+                          }
+                        } catch (err) {
+                          console.error("Delete failed", err);
+                        }
+                      }}
+                    >
+                      Delete Now
+                    </Button>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        )}
+            )}
+    
 
       </div>
     </div>
