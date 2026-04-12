@@ -11,6 +11,7 @@ import {
   IconTerminal2, IconPlayerPlay, IconHistory, IconArrowRight, IconBrain
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
@@ -428,7 +429,7 @@ function TabBtn({
 // ── Main Component ─────────────────────────────────────────────────────────
 function Statement() {
   const [data, setData] = useState<StatementData | null>(null)
-  const [pages, setPages] = useState<string[]>([])
+  const [pages, setPages] = useState<any[]>([])
   const [loadingPdf, setLoadingPdf] = useState(false)
   const [activeBox, setActiveBox] = useState<{ box: number[]; page: number; id: string } | null>(null)
   const [linePath, setLinePath] = useState("")
@@ -472,7 +473,9 @@ function Statement() {
         console.log(`[Statement] Preview assets found: ${imgs ? JSON.parse(imgs).length : 0} images, name: ${name}, hasPassword: ${!!password}`);
         
         if (imgs) {
-          setPages(JSON.parse(imgs))
+          const parsed = JSON.parse(imgs);
+          const normalizedPages = parsed.map((p: any) => typeof p === 'string' ? { image: p, isRelevant: true } : p);
+          setPages(normalizedPages)
           setData({
             _id: 'preview',
             bankName: { val: name || 'Preview Statement', box: [], page: 0 },
@@ -774,6 +777,14 @@ function Statement() {
       if (gmailData) {
         const parsed = JSON.parse(gmailData);
         console.log(`[Statement] Syncing Gmail PDF: ${parsed.filename}`);
+        
+        // Final relevancy check: Only send pages marked as relevant
+        const relevantIndices = pages.length > 0 && typeof pages[0] === 'object' 
+          ? pages.map((p, idx) => p.isRelevant ? idx + 1 : -1).filter(idx => idx !== -1)
+          : null;
+        
+        console.log(`[Statement] Filtered relevant pages for sync:`, relevantIndices);
+
         const { data: syncRes } = await api.post('/api/gmail/sync-selected', {
           selections: [{
             messageId: parsed.messageId,
@@ -781,6 +792,7 @@ function Statement() {
             password: password,
             statementType: forensicType,
             ocrEngine: 'gemini',
+            targetPages: relevantIndices // Backend should support skipping non-relevant pages if needed
           }]
         });
 
@@ -796,6 +808,13 @@ function Statement() {
       } else if (manualData) {
         const parsed = JSON.parse(manualData);
         console.log(`[Statement] Uploading manual PDF for AI audit: ${parsed.name}`);
+        
+        const relevantIndices = pages.length > 0 && typeof pages[0] === 'object' 
+          ? pages.map((p, idx) => p.isRelevant ? idx + 1 : -1).filter(idx => idx !== -1)
+          : null;
+
+        console.log(`[Statement] Filtered relevant pages for manual upload:`, relevantIndices);
+
         const b64 = sessionStorage.getItem('preview_pdf_base64');
         if (!b64) throw new Error("File data lost");
 
@@ -809,6 +828,7 @@ function Statement() {
         formData.append('statementType', forensicType);
         formData.append('ocrEngine', 'gemini');
         if (password) formData.append('pdfPassword', password);
+        if (relevantIndices) formData.append('targetPages', JSON.stringify(relevantIndices));
 
         const { data } = await api.post('/api/statements', formData, {
           headers: { 'Content-Type': 'multipart/form-data' }
@@ -1049,14 +1069,33 @@ function Statement() {
                 <div className="h-8 w-8 border-2 border-primary/20 border-t-primary animate-spin rounded-full" />
                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Rendering...</p>
               </div>
-            ) : pages.map((img, i) => {
+            ) : pages.map((pageObj, i) => {
               const pageNum = i + 1;
+              const img = typeof pageObj === 'string' ? pageObj : pageObj.image;
+              const isRelevant = typeof pageObj === 'string' ? true : pageObj.isRelevant;
+
               const rawOcr = data.rawAIResponse?.type === 'OCR_SPACE_RAW'
                 ? data.rawAIResponse.parsedResults?.find((p: any) => p.page === pageNum)
                 : null;
 
               return (
-                <div key={i} id={`pdf-page-${pageNum}`} className="relative shadow-sm border bg-white w-full">
+                <div key={i} id={`pdf-page-${pageNum}`} className={cn(
+                  "relative shadow-sm border bg-white w-full transition-opacity",
+                  !isRelevant && isPreview ? "opacity-40 grayscale" : "opacity-100"
+                )}>
+                  <div className="absolute top-4 left-4 z-10 flex flex-col gap-2">
+                    <Badge variant="outline" className="bg-white/80 backdrop-blur shadow-sm border-slate-200 text-[10px] font-black uppercase tracking-[0.2em]">
+                      PAGE {pageNum}
+                    </Badge>
+                    {isPreview && (
+                      <Badge className={cn(
+                        "shadow-sm text-[10px] font-black uppercase tracking-widest border-0",
+                        isRelevant ? "bg-emerald-500 text-white" : "bg-red-500 text-white"
+                      )}>
+                        {isRelevant ? "Forensic Relevance: High" : "Noise / Metadata"}
+                      </Badge>
+                    )}
+                  </div>
                   <img src={img} className="w-full h-auto block" alt={`Page ${pageNum}`} />
 
                   {/* OCR.space Raw Highlights */}

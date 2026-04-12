@@ -141,6 +141,7 @@ const statementSchema = new mongoose.Schema({
     default: 'gemini'
   },
   gmailMessageId: { type: String, index: true },
+  targetPages: [Number], // Selective forensic pages
 
   createdAt: { type: Date, default: Date.now },
   rawAIResponse: { type: mongoose.Schema.Types.Mixed },

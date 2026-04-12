@@ -25,6 +25,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import * as pdfjsLib from "pdfjs-dist";
 import pdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
+import Tesseract from 'tesseract.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
@@ -239,20 +240,40 @@ const Upload = () => {
       }).promise;
       console.log(`[Preview] Frontend unlock successful. Pages: ${pdf.numPages}`);
 
-      const imgs: string[] = [];
+      const pageData: Array<{ image: string, isRelevant: boolean }> = [];
+
       for (let i = 1; i <= pdf.numPages; i++) {
+        toast.loading(`Analyzing page ${i}/${pdf.numPages} for relevance...`, { id: 'preview-unlock' });
         const page = await pdf.getPage(i);
         const vp = page.getViewport({ scale: 1.5 });
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d')!;
         canvas.width = vp.width; canvas.height = vp.height;
         await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
-        imgs.push(canvas.toDataURL('image/webp', 0.8));
+        const imgData = canvas.toDataURL('image/webp', 0.8);
+
+        // Frontend OCR Relevance Check
+        const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+        const lowerText = text.toLowerCase();
+        
+        const inclusionKeywords = ['transaction', 'date', 'amount', 'balance', 'description', 'debit', 'credit', 'payment', 'summary', 'statement', 'period', 'account', 'kotak', 'hdfc', 'icici', 'axis', 'sbi', 'cr ', 'dr '];
+        const exclusionKeywords = ['commonly used narrations', 'important information', 'terms and conditions', 'rbi mandates', 'scan for more', 'your account benefits', 'upgrade to', 'cashback', 'mutual funds', 'fixed deposit'];
+
+        const hasExclusion = exclusionKeywords.some(kw => lowerText.includes(kw));
+        const hitCount = inclusionKeywords.reduce((count, kw) => {
+          const matches = lowerText.match(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
+          return count + (matches ? matches.length : 0);
+        }, 0);
+
+        const isRelevant = !hasExclusion && (hitCount >= 5);
+        
+        console.log(`[Preview] Page ${i} relevance: ${isRelevant ? 'RELEVANT' : 'NOISE'} (Hits: ${hitCount}${hasExclusion ? ', Exclusion Triggered' : ''})`);
+        pageData.push({ image: imgData, isRelevant });
       }
-      console.log(`[Preview] Generated ${imgs.length} page images.`);
+      console.log(`[Preview] Generated preview for ${pageData.length} pages.`);
 
       // Store in session for preview
-      sessionStorage.setItem('preview_pdf_images', JSON.stringify(imgs));
+      sessionStorage.setItem('preview_pdf_images', JSON.stringify(pageData));
       sessionStorage.setItem('preview_pdf_name', candidate.filename);
       sessionStorage.setItem('preview_pdf_password', password);
       sessionStorage.setItem('preview_gmail_data', JSON.stringify({
@@ -312,20 +333,40 @@ const Upload = () => {
       }).promise;
       console.log(`[Preview] Unlock successful. Pages: ${pdf.numPages}`);
 
-      const imgs: string[] = [];
+      const pageData: Array<{ image: string, isRelevant: boolean }> = [];
+
       for (let i = 1; i <= pdf.numPages; i++) {
+        toast.loading(`Analyzing page ${i}/${pdf.numPages} for relevance...`, { id: 'preview-staged' });
         const page = await pdf.getPage(i);
         const vp = page.getViewport({ scale: 1.5 });
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d')!;
         canvas.width = vp.width; canvas.height = vp.height;
         await page.render({ canvasContext: ctx, viewport: vp } as any).promise;
-        imgs.push(canvas.toDataURL('image/webp', 0.8));
+        const imgData = canvas.toDataURL('image/webp', 0.8);
+
+        // Frontend OCR Relevance Check
+        const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+        const lowerText = text.toLowerCase();
+        
+        const inclusionKeywords = ['transaction', 'date', 'amount', 'balance', 'description', 'debit', 'credit', 'payment', 'summary', 'statement', 'period', 'account', 'kotak', 'hdfc', 'icici', 'axis', 'sbi', 'cr ', 'dr '];
+        const exclusionKeywords = ['commonly used narrations', 'important information', 'terms and conditions', 'rbi mandates', 'scan for more', 'your account benefits', 'upgrade to', 'cashback', 'mutual funds', 'fixed deposit'];
+
+        const hasExclusion = exclusionKeywords.some(kw => lowerText.includes(kw));
+        const hitCount = inclusionKeywords.reduce((count, kw) => {
+          const matches = lowerText.match(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
+          return count + (matches ? matches.length : 0);
+        }, 0);
+
+        const isRelevant = !hasExclusion && (hitCount >= 5);
+        
+        console.log(`[Preview] Page ${i} relevance: ${isRelevant ? 'RELEVANT' : 'NOISE'} (Hits: ${hitCount}${hasExclusion ? ', Exclusion Triggered' : ''})`);
+        pageData.push({ image: imgData, isRelevant });
       }
-      console.log(`[Preview] Generated ${imgs.length} page images.`);
+      console.log(`[Preview] Generated ${pageData.length} page images.`);
 
       // Store for preview
-      sessionStorage.setItem('preview_pdf_images', JSON.stringify(imgs));
+      sessionStorage.setItem('preview_pdf_images', JSON.stringify(pageData));
       sessionStorage.setItem('preview_pdf_name', files[0].name);
       sessionStorage.setItem('preview_pdf_password', password);
       // For manual upload, we store the file itself as base64 in session
@@ -836,6 +877,5 @@ const Upload = () => {
     </div>
   );
 };
-
 
 export default Upload;

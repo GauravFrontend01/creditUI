@@ -861,7 +861,7 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
         
         if (!result.isUnlocked) {
            console.warn(`[Background] AES-256/High Security detected for ${statementId}. Using PDF.js Text Fallback.`);
-           fallbackText = await extractTextWithPdfJs(pdfBuffer, statement.pdfPassword);
+           fallbackText = await extractTextWithPdfJs(pdfBuffer, statement.pdfPassword, statement.targetPages);
         } else {
            console.log(`[Background] Statement ${statementId} unlocked successfully.`);
         }
@@ -928,8 +928,11 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
             const startTime = Date.now();
   
             let parts = [{ text: activePrompt }];
+            if (statement.targetPages && statement.targetPages.length > 0) {
+                parts.push({ text: `FORENSIC SCOPE: Only process and extract data from the following pages: ${statement.targetPages.join(", ")}. Ignore all other pages as they contain noise or irrelevant metadata.` });
+            }
             if (fallbackText) {
-                console.log(`[Background] Sending extracted text (length=${fallbackText.length}) to Gemini...`);
+                console.log(`[Background] Sending extracted selective text (length=${fallbackText.length}) to Gemini...`);
                 parts.push({ text: `EXTRACTED TEXT DATA:\n${fallbackText}` });
             } else {
                 parts.push({ inlineData: { data: activeBuffer.toString("base64"), mimeType: "application/pdf" } });

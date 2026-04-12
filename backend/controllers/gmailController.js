@@ -442,6 +442,7 @@ exports.syncGmailSelected = async (req, res) => {
           statementType,
           ocrEngine,
           gmailMessageId: messageId,
+          targetPages: sel.targetPages
         });
 
         created.push({ statementId: statement._id, filename, bank: bankLabel });

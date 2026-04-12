@@ -65,6 +65,7 @@ exports.createStatement = async (req, res) => {
       pdfStorageUrl,
       pdfFileName,
       pdfPassword,
+      targetPages: req.body.targetPages ? JSON.parse(req.body.targetPages) : undefined,
     });
 
     // ── Kick off background extraction (don't await!) ─────────────────────

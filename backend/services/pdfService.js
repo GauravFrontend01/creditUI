@@ -59,9 +59,10 @@ async function decryptPdf(buffer, password) {
  * Extracts raw text from a PDF buffer (handles AES-256).
  * @param {Buffer} buffer 
  * @param {string} password 
+ * @param {number[]} [pagesToExtract] - 1-indexed array of pages to extract
  * @returns {Promise<string>}
  */
-async function extractTextWithPdfJs(buffer, password) {
+async function extractTextWithPdfJs(buffer, password, pagesToExtract = null) {
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(buffer),
     password: password ? password.trim() : undefined,
@@ -70,7 +71,10 @@ async function extractTextWithPdfJs(buffer, password) {
   const pdf = await loadingTask.promise;
   let fullText = '';
   
-  for (let i = 1; i <= pdf.numPages; i++) {
+  const targetIndices = pagesToExtract || Array.from({ length: pdf.numPages }, (_, i) => i + 1);
+
+  for (const i of targetIndices) {
+    if (i < 1 || i > pdf.numPages) continue;
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
     const strings = content.items.map(item => item.str);
