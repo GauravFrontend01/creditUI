@@ -3,6 +3,7 @@ const VendorRule = require('../models/VendorRule');
 const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
 const { processStatementInBackground: processStatement, mapAIResponseToStatement } = require('../services/backgroundProcessor');
+const { decryptPdf } = require('../services/pdfService');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -385,4 +386,51 @@ exports.createStatementFromPdfBuffer = async ({
   });
 
   return statement;
+};
+
+// @desc    Download unlocked PDF
+// @route   GET /api/statements/:id/download-unlocked
+// @access  Private
+exports.downloadUnlockedPdf = async (req, res) => {
+  try {
+    const statement = await Statement.findById(req.params.id);
+
+    if (!statement || statement.user.toString() !== req.user._id.toString()) {
+      return res.status(404).json({ message: 'Statement not found' });
+    }
+
+    if (!statement.pdfFileName) {
+      return res.status(400).json({ message: 'No file associated with this statement' });
+    }
+
+    // 1. Fetch from Supabase
+    const { data: pdfData, error: downloadError } = await supabase
+      .storage
+      .from(BUCKET)
+      .download(statement.pdfFileName);
+
+    if (downloadError) {
+      return res.status(500).json({ message: 'Failed to retrieve PDF from storage' });
+    }
+
+    const buffer = Buffer.from(await pdfData.arrayBuffer());
+    
+    // 2. Decrypt
+    try {
+      const unlockedBuffer = await decryptPdf(buffer, statement.pdfPassword);
+      
+      const safeName = (statement.bankName?.val || 'statement')
+        .replace(/[^\w.-]+/g, '_') + '_unlocked.pdf';
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`);
+      res.send(unlockedBuffer);
+    } catch (e) {
+      console.error('Decryption failed for download', e);
+      res.status(400).json({ message: 'Could not unlock PDF with stored password' });
+    }
+  } catch (error) {
+    console.error('downloadUnlockedPdf error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
 };

@@ -12,6 +12,9 @@ const GOOGLE_LOCATION = process.env.GOOGLE_LOCATION || "us-central1";
 
 const vertexAI = new VertexAI({ project: GOOGLE_PROJECT_ID, location: GOOGLE_LOCATION });
 
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
 const { Mistral } = require('@mistralai/mistralai');
 const mistral = new Mistral({ apiKey: process.env.MISTRAL_API_KEY });
 
@@ -19,6 +22,7 @@ const Groq = require('groq-sdk');
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 const { PDFDocument } = require('pdf-lib');
+const { decryptPdf, extractTextWithPdfJs } = require('./pdfService');
 
 const OCR_SPACE_API_KEY = process.env.OCR_SPACE_API_KEY || "K89900476788957";
 
@@ -843,71 +847,96 @@ const processStatementInBackground = async (statementId, pdfBuffer) => {
     const activeSchema = isBank ? bankExtractionSchema : extractionSchema;
     const ocrEngine = statement.ocrEngine || 'gemini';
 
+    // ── PDF Unlock Layer ─────────────────────────────────────────────────────
+    let activeBuffer = pdfBuffer;
+    let fallbackText = null;
+
+    if (statement.pdfPassword) {
+      try {
+        console.log(`[Background] Unlocking encrypted statement ${statementId}...`);
+        activeBuffer = await decryptPdf(pdfBuffer, statement.pdfPassword);
+        console.log(`[Background] Statement ${statementId} unlocked successfully.`);
+      } catch (e) {
+        if (e.message.includes('AES-256')) {
+           console.warn(`[Background] AES-256 detected for ${statementId}. Using PDF.js Text Fallback.`);
+           fallbackText = await extractTextWithPdfJs(pdfBuffer, statement.pdfPassword);
+        } else {
+           console.error(`[Background] Unlock failed for ${statementId}:`, e.message);
+           throw new Error(`Failed to unlock PDF. Please verify the password. Details: ${e.message}`);
+        }
+      }
+    }
+
     let extraction = null;
     let attempt = 0;
     const maxAttempts = 2;
 
-    if (ocrEngine.startsWith('ocr_space')) {
-      let variant = "1";
-      if (ocrEngine === 'ocr_space_v2') variant = "2";
-      if (ocrEngine === 'ocr_space_v3') variant = "3";
+      if (ocrEngine.startsWith('ocr_space')) {
+        let variant = "1";
+        if (ocrEngine === 'ocr_space_v2') variant = "2";
+        if (ocrEngine === 'ocr_space_v3') variant = "3";
+  
+        console.log(`[Background] OCR.space Engine ${variant} process starting for ${statementId}...`);
+        extraction = await processWithOCRSpace(activeBuffer, activePrompt, activeSchema, variant);
+        console.log(`[Background] OCR.space completed for ${statementId}`);
+      } else if (ocrEngine === 'ocr_mistral') {
+        console.log(`[Background] Mistral Neural OCR process starting for ${statementId}...`);
+        extraction = await processWithMistralOCR(activeBuffer, `statement_${statementId}.pdf`);
+        console.log(`[Background] Mistral OCR completed for ${statementId}`);
+      } else if (ocrEngine === 'mistral_llama_hybrid') {
+        console.log(`[Hybrid Flow] Stage 1: Cropping to first page and sending to Mistral OCR...`);
+  
+        const pdfDoc = await PDFDocument.load(activeBuffer);
+        const firstPageDoc = await PDFDocument.create();
+        const [firstPage] = await firstPageDoc.copyPages(pdfDoc, [0]);
+        firstPageDoc.addPage(firstPage);
+        const firstPageBuffer = Buffer.from(await firstPageDoc.save());
+  
+        const mistralRaw = await processWithMistralOCR(firstPageBuffer, `statement_${statementId}.pdf`);
+        const allMarkdown = mistralRaw.data.pages.map(p => p.markdown).join('\n\n');
+  
+        console.log(`[Hybrid Flow] Stage 2: Mapping markdown to JSON via Groq (Llama 3)...`);
+        const llamaResult = await processWithGroq(allMarkdown, activePrompt);
+  
+        extraction = { ...llamaResult, type: 'MISTRAL_LLAMA_HYBRID_MAPPED', rawMistral: mistralRaw };
+        console.log(`[Hybrid Flow] Joint pipeline completed for ${statementId}`);
+      } else if (ocrEngine === 'groq_llama') {
+        console.log(`[Background] Groq LLM Chain process starting for ${statementId}...`);
+        // Groq needs text. We'll use OCR.space V2 as the high-accuracy text provider.
+        const rawTextData = await processWithOCRSpace(activeBuffer, activePrompt, activeSchema, "2");
+        const allText = rawTextData.parsedResults.map(p => p.text).join('\n\n');
+  
+        const groqResult = await processWithGroq(allText, activePrompt);
+        extraction = { ...groqResult, type: 'GROQ_LLAMA_MAPPED' };
+        console.log(`[Background] Groq LLM completion successful for ${statementId}`);
+      } else {
+        const model = vertexAI.getGenerativeModel({
+          model: "gemini-2.0-flash",
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: activeSchema,
+          }
+        });
+  
+        while (attempt < maxAttempts) {
+          try {
+            console.log(`[Background] Gemini Extraction (Vertex AI) starting for ${statementId} (${statement.type})...`);
+            const startTime = Date.now();
+  
+            let parts = [{ text: activePrompt }];
+            if (fallbackText) {
+                console.log(`[Background] Sending extracted text (length=${fallbackText.length}) to Gemini...`);
+                parts.push({ text: `EXTRACTED TEXT DATA:\n${fallbackText}` });
+            } else {
+                parts.push({ inlineData: { data: activeBuffer.toString("base64"), mimeType: "application/pdf" } });
+            }
 
-      console.log(`[Background] OCR.space Engine ${variant} process starting for ${statementId}...`);
-      extraction = await processWithOCRSpace(pdfBuffer, activePrompt, activeSchema, variant);
-      console.log(`[Background] OCR.space completed for ${statementId}`);
-    } else if (ocrEngine === 'ocr_mistral') {
-      console.log(`[Background] Mistral Neural OCR process starting for ${statementId}...`);
-      extraction = await processWithMistralOCR(pdfBuffer, `statement_${statementId}.pdf`);
-      console.log(`[Background] Mistral OCR completed for ${statementId}`);
-    } else if (ocrEngine === 'mistral_llama_hybrid') {
-      console.log(`[Hybrid Flow] Stage 1: Cropping to first page and sending to Mistral OCR...`);
-
-      const pdfDoc = await PDFDocument.load(pdfBuffer);
-      const firstPageDoc = await PDFDocument.create();
-      const [firstPage] = await firstPageDoc.copyPages(pdfDoc, [0]);
-      firstPageDoc.addPage(firstPage);
-      const firstPageBuffer = Buffer.from(await firstPageDoc.save());
-
-      const mistralRaw = await processWithMistralOCR(firstPageBuffer, `statement_${statementId}.pdf`);
-      const allMarkdown = mistralRaw.data.pages.map(p => p.markdown).join('\n\n');
-
-      console.log(`[Hybrid Flow] Stage 2: Mapping markdown to JSON via Groq (Llama 3)...`);
-      const llamaResult = await processWithGroq(allMarkdown, activePrompt);
-
-      extraction = { ...llamaResult, type: 'MISTRAL_LLAMA_HYBRID_MAPPED', rawMistral: mistralRaw };
-      console.log(`[Hybrid Flow] Joint pipeline completed for ${statementId}`);
-    } else if (ocrEngine === 'groq_llama') {
-      console.log(`[Background] Groq LLM Chain process starting for ${statementId}...`);
-      // Groq needs text. We'll use OCR.space V2 as the high-accuracy text provider.
-      const rawTextData = await processWithOCRSpace(pdfBuffer, activePrompt, activeSchema, "2");
-      const allText = rawTextData.parsedResults.map(p => p.text).join('\n\n');
-
-      const groqResult = await processWithGroq(allText, activePrompt);
-      extraction = { ...groqResult, type: 'GROQ_LLAMA_MAPPED' };
-      console.log(`[Background] Groq LLM completion successful for ${statementId}`);
-    } else {
-      const model = vertexAI.getGenerativeModel({
-        model: "gemini-2.5-flash",
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: activeSchema,
-        }
-      });
-
-      while (attempt < maxAttempts) {
-        try {
-          console.log(`[Background] Gemini Extraction (Vertex AI) starting for ${statementId} (${statement.type})...`);
-          const startTime = Date.now();
-
-          const result = await model.generateContent({
-            contents: [{
-              role: 'user',
-              parts: [
-                { text: activePrompt },
-                { inlineData: { data: pdfBuffer.toString("base64"), mimeType: "application/pdf" } }
-              ]
-            }]
-          });
+            const result = await model.generateContent({
+              contents: [{
+                role: 'user',
+                parts: parts
+              }]
+            });
 
           const response = await result.response;
           const duration = ((Date.now() - startTime) / 1000).toFixed(1);

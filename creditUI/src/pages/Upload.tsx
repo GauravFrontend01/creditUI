@@ -12,6 +12,7 @@ import {
   IconMail,
   IconRefresh,
   IconUnlink,
+  IconDownload,
 } from '@tabler/icons-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -213,6 +214,32 @@ const Upload = () => {
       toast.error(e.response?.data?.message || 'Sync failed.');
     } finally {
       setGmailBusy(false);
+    }
+  };
+
+  const handlePreviewCandidate = async (candidate: any) => {
+    const password = candidatePasswords[candidate.id] || '';
+    try {
+      toast.loading(`Unlocking ${candidate.filename}...`, { id: 'preview-unlock' });
+      const response = await api.post('/api/gmail/preview-unlocked', {
+        messageId: candidate.messageId,
+        filename: candidate.filename,
+        password
+      }, { responseType: 'blob' });
+      
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `preview_${candidate.filename}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      toast.success('Successfully unlocked and downloaded preview.', { id: 'preview-unlock' });
+    } catch (e: any) {
+      console.error(e);
+      toast.error('Unlock failed. Please check the password.', { id: 'preview-unlock' });
     }
   };
 
@@ -493,9 +520,20 @@ const Upload = () => {
                                   value={candidatePasswords[c.id] || ''}
                                   onChange={(e) => setCandidatePasswords(prev => ({ ...prev, [c.id]: e.target.value }))}
                                 />
-                                {c.savedPassword && !candidatePasswords[c.id] && (
-                                  <p className="text-[9px] text-emerald-600 mt-1 pl-1">✓ Using saved password</p>
-                                )}
+                                <div className="flex items-center justify-between mt-1">
+                                  {c.savedPassword && !candidatePasswords[c.id] ? (
+                                    <p className="text-[9px] text-emerald-600 pl-1">✓ Using saved password</p>
+                                  ) : <div />}
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-6 px-2 text-[9px] font-bold text-primary hover:bg-primary/5 gap-1"
+                                    onClick={() => handlePreviewCandidate(c)}
+                                  >
+                                    <IconDownload size={10} />
+                                    Verify & Download
+                                  </Button>
+                                </div>
                               </div>
                             )}
                           </div>

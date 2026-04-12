@@ -11,6 +11,7 @@ const {
   google,
 } = require('../services/gmailService');
 const { createStatementFromPdfBuffer } = require('./statementController');
+const { decryptPdf } = require('../services/pdfService');
 
 function identifyBank(subject, from) {
   const s = (subject + ' ' + from).toLowerCase();
@@ -474,5 +475,44 @@ exports.resetGmailSync = async (req, res) => {
   } catch (error) {
     console.error('resetGmailSync', error);
     res.status(500).json({ message: 'Server error' });
+  }
+};
+// @route   POST /api/gmail/preview-unlocked
+// @access  Private
+exports.previewGmailPdf = async (req, res) => {
+  try {
+    const { messageId, filename, password } = req.body;
+    if (!messageId || !filename) return res.status(400).json({ message: 'Missing parameters' });
+
+    const user = await User.findById(req.user._id).select('+gmailRefreshToken');
+    if (!user?.gmailRefreshToken) return res.status(400).json({ message: 'Connect Gmail first' });
+
+    const oauth2Client = createOAuth2Client();
+    oauth2Client.setCredentials({
+      refresh_token: user.gmailRefreshToken,
+      access_token: user.gmailAccessToken || undefined,
+      expiry_date: user.gmailTokenExpiry ? user.gmailTokenExpiry.getTime() : undefined,
+    });
+
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    const pdfs = await extractPdfAttachments(gmail, messageId);
+    const match = pdfs.find(p => p.filename === filename) || pdfs[0];
+
+    if (!match) return res.status(404).json({ message: 'Attachment not found' });
+    
+    console.log(`[Preview] Processing attachment: ${match.filename} (${match.buffer.length} bytes)`);
+
+    try {
+      const unlocked = await decryptPdf(match.buffer, password);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="preview_${filename}"`);
+      res.send(unlocked);
+    } catch (e) {
+      console.error('Preview decryption failed', e);
+      res.status(400).json({ message: e.message || 'Incorrect password for this PDF.' });
+    }
+  } catch (error) {
+    console.error('previewGmailPdf error:', error);
+    res.status(500).json({ message: 'Internal server error during preview' });
   }
 };

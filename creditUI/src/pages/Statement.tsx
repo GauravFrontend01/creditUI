@@ -147,7 +147,7 @@ const getCurrencySymbol = (code?: string) => {
 
 const fmt = (val?: any, sym = '₹') => {
   if (val == null) return '—'
-  
+
   let num: number;
   if (typeof val === 'string') {
     // Robust cleaning for strings like "INDIAN RUPEE 7,142.45"
@@ -158,24 +158,24 @@ const fmt = (val?: any, sym = '₹') => {
   }
 
   if (isNaN(num)) return '—';
-  
+
   return `${sym}${num.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
 }
 
 const CATEGORY_COLORS: Record<string, string> = {
-  Food:          'bg-orange-50 text-orange-600',
-  Shopping:      'bg-purple-50 text-purple-600',
+  Food: 'bg-orange-50 text-orange-600',
+  Shopping: 'bg-purple-50 text-purple-600',
   Entertainment: 'bg-pink-50 text-pink-600',
-  Travel:        'bg-blue-50 text-blue-600',
-  EMI:           'bg-indigo-50 text-indigo-600',
-  Fee:           'bg-slate-100 text-slate-500',
-  Cashback:      'bg-emerald-50 text-emerald-600',
-  Utilities:     'bg-cyan-50 text-cyan-600',
-  Healthcare:    'bg-red-50 text-red-500',
-  Fuel:          'bg-yellow-50 text-yellow-600',
-  Subscription:  'bg-violet-50 text-violet-600',
-  Forex:         'bg-teal-50 text-teal-600',
-  Other:         'bg-slate-50 text-slate-400',
+  Travel: 'bg-blue-50 text-blue-600',
+  EMI: 'bg-indigo-50 text-indigo-600',
+  Fee: 'bg-slate-100 text-slate-500',
+  Cashback: 'bg-emerald-50 text-emerald-600',
+  Utilities: 'bg-cyan-50 text-cyan-600',
+  Healthcare: 'bg-red-50 text-red-500',
+  Fuel: 'bg-yellow-50 text-yellow-600',
+  Subscription: 'bg-violet-50 text-violet-600',
+  Forex: 'bg-teal-50 text-teal-600',
+  Other: 'bg-slate-50 text-slate-400',
 }
 
 function SortHeader({ column, label }: { column: any; label: string }) {
@@ -188,7 +188,7 @@ function SortHeader({ column, label }: { column: any; label: string }) {
       {label}
       {sorted === "asc" ? <IconArrowUp size={11} className="text-primary" />
         : sorted === "desc" ? <IconArrowDown size={11} className="text-primary" />
-        : <IconArrowsUpDown size={11} />}
+          : <IconArrowsUpDown size={11} />}
     </button>
   )
 }
@@ -438,7 +438,7 @@ function Statement() {
   const [txSorting, setTxSorting] = useState<SortingState>([])
   const [txGlobalFilter, setTxGlobalFilter] = useState("")
   const [activeFooterFilter, setActiveFooterFilter] = useState<'debit' | 'credit' | 'fees' | null>(null)
-  const [toast, setToast] = useState<{message: string, visible: boolean, type: 'success' | 'error'}>({ message: "", visible: false, type: 'success' })
+  const [toast, setToast] = useState<{ message: string, visible: boolean, type: 'success' | 'error' }>({ message: "", visible: false, type: 'success' })
   const [showMathDetails, setShowMathDetails] = useState(false);
   const [reprocessing, setReprocessing] = useState(false);
   const [showVault, setShowVault] = useState(false);
@@ -467,13 +467,13 @@ function Statement() {
           if (data.rawAIResponse) {
             console.log("[Neural Core] Raw AI Extraction Response:", data.rawAIResponse);
           }
-          
+
           if (data.rawAIResponse?.type === 'OCR_SPACE_RAW' && (!data.transactions || data.transactions.length === 0)) {
             setTab('raw_ocr')
           }
-          
+
           if (data.pdfStorageUrl && pages.length === 0) loadPdfFromUrl(data.pdfStorageUrl, data.pdfPassword)
-          
+
           // If still processing, setup polling
           if ((data.status === 'PENDING' || data.status === 'PROCESSING') && !pollInterval) {
             pollInterval = setInterval(load, 3000);
@@ -495,12 +495,12 @@ function Statement() {
             ? parsed.bankName
             : { val: parsed.bankName || name || 'Statement', box: [], page: 0 };
 
-          setData({ 
-            ...parsed, 
-            _id: '', 
-            bankName: finalBankName, 
-            transactions: parsed.transactions || [], 
-            emiList: parsed.emiList || [] 
+          setData({
+            ...parsed,
+            _id: '',
+            bankName: finalBankName,
+            transactions: parsed.transactions || [],
+            emiList: parsed.emiList || []
           })
           loadPdfFromBase64(b64, pass || '')
         } else navigate('/')
@@ -514,7 +514,7 @@ function Statement() {
   }, [id])
 
   useEffect(() => {
-    api.get('/api/vendor-rules').then((res) => setVendorRules(res.data)).catch(() => {})
+    api.get('/api/vendor-rules').then((res) => setVendorRules(res.data)).catch(() => { })
   }, [])
 
   const vendorRulesByKey = useMemo(() => {
@@ -664,7 +664,7 @@ function Statement() {
   }
 
   const txColumns = buildColumns(
-    data?.currency ? getCurrencySymbol(data.currency) : '₹', 
+    data?.currency ? getCurrencySymbol(data.currency) : '₹',
     handleCategoryUpdate,
     data?.type,
     {
@@ -725,6 +725,41 @@ function Statement() {
     }
   };
 
+
+
+  const handleDownloadUnlocked = async () => {
+    if (!id) {
+      // Handle session-only view (already unlocked usually, or from memory)
+      const b64 = sessionStorage.getItem('pdf_base64');
+      if (b64) {
+        const link = document.createElement('a');
+        link.href = b64;
+        link.download = `${data?.bankName?.val || 'statement'}_unlocked.pdf`;
+        link.click();
+      }
+      return;
+    }
+
+    try {
+      const response = await api.get(`/api/statements/${id}/download-unlocked`, {
+        responseType: 'blob'
+      });
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${data?.bankName?.val || 'statement'}_unlocked.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Download failed', e);
+      setToast({ message: "Failed to download unlocked PDF", visible: true, type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+    }
+  };
+
   const table = useReactTable({
     data: data?.transactions ?? [],
     columns: txColumns,
@@ -773,7 +808,7 @@ function Statement() {
       let nextIndex = 0;
       if (activeBox) {
         const currentIndex = rows.findIndex(r => (r.original._id || r.original.description) === activeBox.id);
-        
+
         if (currentIndex !== -1) {
           if (e.key === 'ArrowDown') {
             nextIndex = currentIndex < rows.length - 1 ? currentIndex + 1 : 0;
@@ -786,9 +821,9 @@ function Statement() {
       const nextTx = rows[nextIndex].original;
       if (nextTx.box?.length && nextTx.page) {
         setActiveBox({ box: nextTx.box, page: nextTx.page, id: nextTx._id || nextTx.description });
-        
+
         document.getElementById(`pdf-page-${nextTx.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        
+
         // Let React render the new active state before scrolling the table
         setTimeout(() => {
           document.getElementById(`tx-row-${nextTx._id || nextTx.description}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -816,7 +851,7 @@ function Statement() {
           <p className="text-sm text-slate-400 font-bold uppercase tracking-[0.2em]">Mapping spatial vectors & categorizing portfolio risks...</p>
         </div>
         <Button variant="outline" className="rounded-xl px-8 h-12 gap-2 mt-4" onClick={() => navigate('/statements')}>
-           <IconArrowLeft size={16} /> Return to Queue
+          <IconArrowLeft size={16} /> Return to Queue
         </Button>
       </div>
     )
@@ -830,13 +865,13 @@ function Statement() {
 
   // Compute totals directly from transactions — always matches what user sees
   // ROOT CAUSE FIX: Exclude merchant EMIs (mostly SBI Card "FP EMI") and Internal Transfers from sums
-  const txTotalDebits  = txs
+  const txTotalDebits = txs
     .filter(t => t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI') && !t.isInternal && t.category !== 'Transfer')
     .reduce((s, t) => s + (t.amount || t.withdrawal || 0), 0)
   const txTotalCredits = txs
     .filter(t => t.type === 'Credit' && !t.isInternal && t.category !== 'Transfer')
     .reduce((s, t) => s + (t.amount || t.deposit || 0), 0)
-  const txTotalFees    = txs
+  const txTotalFees = txs
     .filter(t => t.category === 'Fee' && t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI'))
     .reduce((s, t) => s + (t.amount || 0), 0)
 
@@ -875,7 +910,13 @@ function Statement() {
                 {data.statementPeriod.from} – {data.statementPeriod.to}
               </span>
             )}
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-slate-400 hover:text-primary transition-colors"
+              onClick={handleDownloadUnlocked}
+              title="Download Unlocked PDF"
+            >
               <IconDownload size={14} />
             </Button>
           </div>
@@ -901,14 +942,14 @@ function Statement() {
               </div>
             ) : pages.map((img, i) => {
               const pageNum = i + 1;
-              const rawOcr = data.rawAIResponse?.type === 'OCR_SPACE_RAW' 
+              const rawOcr = data.rawAIResponse?.type === 'OCR_SPACE_RAW'
                 ? data.rawAIResponse.parsedResults?.find((p: any) => p.page === pageNum)
                 : null;
 
               return (
                 <div key={i} id={`pdf-page-${pageNum}`} className="relative shadow-sm border bg-white w-full">
                   <img src={img} className="w-full h-auto block" alt={`Page ${pageNum}`} />
-                  
+
                   {/* OCR.space Raw Highlights */}
                   {rawOcr && rawOcr.overlay?.Lines?.map((line: any, li: number) => (
                     line.Words?.map((word: any, wi: number) => (
@@ -961,10 +1002,10 @@ function Statement() {
                   {typeof data.bankName === 'object' ? data.bankName?.val : data.bankName}
                 </h2>
                 <span className="text-[9px] font-black uppercase tracking-[0.15em] bg-primary/5 text-primary px-2 py-0.5 rounded border border-primary/10">
-                  {data.ocrEngine === 'ocr_space' ? 'OCR.space v1' : 
-                   data.ocrEngine === 'ocr_space_v1' ? 'OCR.space v1' :
-                   data.ocrEngine === 'ocr_space_v2' ? 'OCR.space v2' :
-                   data.ocrEngine === 'ocr_space_v3' ? 'OCR.space v3' : 'Gemini Native'}
+                  {data.ocrEngine === 'ocr_space' ? 'OCR.space v1' :
+                    data.ocrEngine === 'ocr_space_v1' ? 'OCR.space v1' :
+                      data.ocrEngine === 'ocr_space_v2' ? 'OCR.space v2' :
+                        data.ocrEngine === 'ocr_space_v3' ? 'OCR.space v3' : 'Gemini Native'}
                 </span>
               </div>
               <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
@@ -997,123 +1038,123 @@ function Statement() {
               )}
             </div>
             <div className="flex items-center gap-4">
-               {isSavedView && !data.isApproved && data.status === 'COMPLETED' && (
-                 <Button 
-                   onClick={confirmApproval}
-                   className="rounded-xl px-6 h-11 gap-2 bg-emerald-600 hover:bg-emerald-700 shadow-[0_8px_16px_-6px_rgba(16,185,129,0.3)] font-bold text-xs uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98]"
-                 >
-                   <IconCheck size={16} strokeWidth={3} /> Approve Audit
-                 </Button>
-               )}
+              {isSavedView && !data.isApproved && data.status === 'COMPLETED' && (
+                <Button
+                  onClick={confirmApproval}
+                  className="rounded-xl px-6 h-11 gap-2 bg-emerald-600 hover:bg-emerald-700 shadow-[0_8px_16px_-6px_rgba(16,185,129,0.3)] font-bold text-xs uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98]"
+                >
+                  <IconCheck size={16} strokeWidth={3} /> Approve Audit
+                </Button>
+              )}
 
-               {isSavedView && (
-                 <div className="flex gap-2">
-                   <Button 
-                     variant="ghost" 
-                     size="sm" 
-                     onClick={() => setShowRawJson(true)}
-                     className="h-11 px-4 rounded-xl border border-slate-100/50 hover:bg-slate-50 transition-all font-mono text-[10px] font-bold text-slate-400 hover:text-slate-900 uppercase tracking-widest"
-                   >
-                     Raw JSON
-                   </Button>
+              {isSavedView && (
+                <div className="flex gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowRawJson(true)}
+                    className="h-11 px-4 rounded-xl border border-slate-100/50 hover:bg-slate-50 transition-all font-mono text-[10px] font-bold text-slate-400 hover:text-slate-900 uppercase tracking-widest"
+                  >
+                    Raw JSON
+                  </Button>
 
-                    <Button 
-                      variant="outline" 
-                      size="sm" 
-                      onClick={handleReIngest} 
-                      disabled={reprocessing} 
-                      className={cn(
-                        "h-11 px-4 rounded-xl border-dashed transition-all font-bold text-[10px] uppercase tracking-widest gap-2", 
-                        reprocessing && "animate-pulse",
-                        data?.status === 'FAILED' 
-                          ? "border-red-300 bg-red-50 text-red-600 hover:bg-red-100 ring-1 ring-red-200 shadow-[0_0_15px_-3px_rgba(239,68,68,0.2)]" 
-                          : "border-slate-200 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200"
-                      )}
-                      title={data?.status === 'FAILED' ? `Error: ${data.processingError}` : "Re-launch AI extraction cycle"}
-                    >
-                      {reprocessing ? (
-                        <>
-                          <IconLoader2 size={14} className={cn("animate-spin", data?.status === 'FAILED' ? "text-red-500" : "text-emerald-500")} />
-                          {data?.status === 'FAILED' ? 'Retrying...' : 'Ingesting...'}
-                        </>
-                      ) : (
-                        <>
-                          {data?.status === 'FAILED' ? <IconAlertTriangle size={14} /> : <IconReceipt2 size={14} />}
-                          {data?.status === 'FAILED' ? 'Retry Audit' : 'Re-Ingest'}
-                        </>
-                      )}
-                    </Button>
-
-
-                   <Button 
-                     variant="outline" 
-                     size="sm" 
-                     onClick={handleReprocess}
-                     disabled={reprocessing}
-                     className={cn(
-                       "h-11 px-4 rounded-xl border-dashed border-slate-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-all font-bold text-[10px] uppercase tracking-widest gap-2",
-                       reprocessing && "animate-pulse"
-                     )}
-                   >
-                     {reprocessing ? (
-                       <>
-                         <IconLoader2 size={14} className="animate-spin text-indigo-500" />
-                         Mapping...
-                       </>
-                     ) : (
-                       <>
-                         <IconMath size={14} />
-                         Re-Sync AI
-                       </>
-                     )}
-                   </Button>
-                 </div>
-               )}
-
-               {isSavedView && data.status === 'COMPLETED' && (
-                 <div 
-                   onClick={() => setShowMathDetails(true)}
-                   className={cn("flex flex-col items-end gap-1 px-4 py-1.5 rounded-xl border border-l-4 cursor-pointer hover:shadow-md transition-all active:scale-95", 
-                   data.extractionQuality === 'verified' ? "bg-emerald-50 border-emerald-100 border-l-emerald-500 hover:bg-emerald-100/50" :
-                   data.extractionQuality === 'minor_mismatch' ? "bg-amber-50 border-amber-100 border-l-amber-500 hover:bg-amber-100/50" :
-                   data.extractionQuality === 'extraction_error' ? "bg-red-50 border-red-100 border-l-red-500 hover:bg-red-100/50" :
-                   "bg-slate-50 border-slate-100 border-l-slate-400 hover:bg-slate-100"
-                 )}>
-                    <div className="flex items-center gap-2">
-                      {data.extractionQuality === 'verified' && <IconShieldCheck size={14} className="text-emerald-600" />}
-                      {data.extractionQuality === 'minor_mismatch' && <IconAlertTriangle size={14} className="text-amber-600" />}
-                      {data.extractionQuality === 'extraction_error' && <IconShieldX size={14} className="text-red-600" />}
-                      {data.extractionQuality === 'unverified' && <IconFileOff size={14} className="text-slate-400" />}
-
-                      <span className={cn("text-[10px] font-black uppercase tracking-widest",
-                        data.extractionQuality === 'verified' ? "text-emerald-700" :
-                        data.extractionQuality === 'minor_mismatch' ? "text-amber-700" :
-                        data.extractionQuality === 'extraction_error' ? "text-red-700" :
-                        "text-slate-500"
-                      )}>
-                        {data.extractionQuality === 'verified' ? 'Math Verified' : 
-                         data.extractionQuality === 'minor_mismatch' ? 'Minor Mismatch' : 
-                         data.extractionQuality === 'extraction_error' ? 'Extraction Error' : 'Unverified'}
-                      </span>
-                    </div>
-
-                    {data.reconciliation && data.extractionQuality !== 'unverified' && (
-                      <span className="text-[9px] font-bold text-slate-500 tracking-wider">
-                        {data.reconciliation.balanceDelta === 0 
-                          ? 'Zero Tolerance Δ' 
-                          : `Δ ${fmt(data.reconciliation.balanceDelta, sym)} error`
-                        }
-                      </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleReIngest}
+                    disabled={reprocessing}
+                    className={cn(
+                      "h-11 px-4 rounded-xl border-dashed transition-all font-bold text-[10px] uppercase tracking-widest gap-2",
+                      reprocessing && "animate-pulse",
+                      data?.status === 'FAILED'
+                        ? "border-red-300 bg-red-50 text-red-600 hover:bg-red-100 ring-1 ring-red-200 shadow-[0_0_15px_-3px_rgba(239,68,68,0.2)]"
+                        : "border-slate-200 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200"
                     )}
-                 </div>
-               )}
+                    title={data?.status === 'FAILED' ? `Error: ${data.processingError}` : "Re-launch AI extraction cycle"}
+                  >
+                    {reprocessing ? (
+                      <>
+                        <IconLoader2 size={14} className={cn("animate-spin", data?.status === 'FAILED' ? "text-red-500" : "text-emerald-500")} />
+                        {data?.status === 'FAILED' ? 'Retrying...' : 'Ingesting...'}
+                      </>
+                    ) : (
+                      <>
+                        {data?.status === 'FAILED' ? <IconAlertTriangle size={14} /> : <IconReceipt2 size={14} />}
+                        {data?.status === 'FAILED' ? 'Retry Audit' : 'Re-Ingest'}
+                      </>
+                    )}
+                  </Button>
 
-               {data.isApproved && (
-                 <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-4 py-2 rounded-xl border border-emerald-100">
-                    <IconCheck size={14} strokeWidth={3} />
-                    <span className="text-[10px] font-black uppercase tracking-widest">Verified Report</span>
-                 </div>
-               )}
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleReprocess}
+                    disabled={reprocessing}
+                    className={cn(
+                      "h-11 px-4 rounded-xl border-dashed border-slate-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-all font-bold text-[10px] uppercase tracking-widest gap-2",
+                      reprocessing && "animate-pulse"
+                    )}
+                  >
+                    {reprocessing ? (
+                      <>
+                        <IconLoader2 size={14} className="animate-spin text-indigo-500" />
+                        Mapping...
+                      </>
+                    ) : (
+                      <>
+                        <IconMath size={14} />
+                        Re-Sync AI
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
+
+              {isSavedView && data.status === 'COMPLETED' && (
+                <div
+                  onClick={() => setShowMathDetails(true)}
+                  className={cn("flex flex-col items-end gap-1 px-4 py-1.5 rounded-xl border border-l-4 cursor-pointer hover:shadow-md transition-all active:scale-95",
+                    data.extractionQuality === 'verified' ? "bg-emerald-50 border-emerald-100 border-l-emerald-500 hover:bg-emerald-100/50" :
+                      data.extractionQuality === 'minor_mismatch' ? "bg-amber-50 border-amber-100 border-l-amber-500 hover:bg-amber-100/50" :
+                        data.extractionQuality === 'extraction_error' ? "bg-red-50 border-red-100 border-l-red-500 hover:bg-red-100/50" :
+                          "bg-slate-50 border-slate-100 border-l-slate-400 hover:bg-slate-100"
+                  )}>
+                  <div className="flex items-center gap-2">
+                    {data.extractionQuality === 'verified' && <IconShieldCheck size={14} className="text-emerald-600" />}
+                    {data.extractionQuality === 'minor_mismatch' && <IconAlertTriangle size={14} className="text-amber-600" />}
+                    {data.extractionQuality === 'extraction_error' && <IconShieldX size={14} className="text-red-600" />}
+                    {data.extractionQuality === 'unverified' && <IconFileOff size={14} className="text-slate-400" />}
+
+                    <span className={cn("text-[10px] font-black uppercase tracking-widest",
+                      data.extractionQuality === 'verified' ? "text-emerald-700" :
+                        data.extractionQuality === 'minor_mismatch' ? "text-amber-700" :
+                          data.extractionQuality === 'extraction_error' ? "text-red-700" :
+                            "text-slate-500"
+                    )}>
+                      {data.extractionQuality === 'verified' ? 'Math Verified' :
+                        data.extractionQuality === 'minor_mismatch' ? 'Minor Mismatch' :
+                          data.extractionQuality === 'extraction_error' ? 'Extraction Error' : 'Unverified'}
+                    </span>
+                  </div>
+
+                  {data.reconciliation && data.extractionQuality !== 'unverified' && (
+                    <span className="text-[9px] font-bold text-slate-500 tracking-wider">
+                      {data.reconciliation.balanceDelta === 0
+                        ? 'Zero Tolerance Δ'
+                        : `Δ ${fmt(data.reconciliation.balanceDelta, sym)} error`
+                      }
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {data.isApproved && (
+                <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-4 py-2 rounded-xl border border-emerald-100">
+                  <IconCheck size={14} strokeWidth={3} />
+                  <span className="text-[10px] font-black uppercase tracking-widest">Verified Report</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1137,13 +1178,13 @@ function Statement() {
                 The forensic pipeline encountered a blockage: <span className="text-red-700">{data.processingError || "Unknown connection error."}</span>
               </p>
               <div className="flex items-center gap-4 mt-2">
-                 <button onClick={handleReIngest} className="text-[10px] font-black text-red-600 hover:text-red-800 uppercase tracking-widest flex items-center gap-1.5 transition-colors">
-                    <IconReceipt2 size={12} /> Re-Initialize Engine
-                 </button>
-                 <span className="h-1 w-1 rounded-full bg-red-200" />
-                 <p className="text-[9px] font-bold text-red-400 uppercase tracking-widest">
-                    Tip: If spending cap is exceeded, wait a few minutes or switch API keys.
-                 </p>
+                <button onClick={handleReIngest} className="text-[10px] font-black text-red-600 hover:text-red-800 uppercase tracking-widest flex items-center gap-1.5 transition-colors">
+                  <IconReceipt2 size={12} /> Re-Initialize Engine
+                </button>
+                <span className="h-1 w-1 rounded-full bg-red-200" />
+                <p className="text-[9px] font-bold text-red-400 uppercase tracking-widest">
+                  Tip: If spending cap is exceeded, wait a few minutes or switch API keys.
+                </p>
               </div>
             </div>
           </div>
@@ -1313,7 +1354,7 @@ function Statement() {
 
                 <div className="flex items-center gap-3">
                   {!isSavedView && (
-                    <Button 
+                    <Button
                       onClick={() => navigate('/statements')}
                       className="rounded-xl h-10 px-6 font-bold text-xs bg-primary"
                     >
@@ -1331,110 +1372,110 @@ function Statement() {
         {tab === 'raw_ocr' as any && (
           <div className="flex-1 flex flex-col overflow-hidden bg-slate-50 p-6">
             <div className="bg-white rounded-2xl border p-6 shadow-sm overflow-y-auto flex-1">
-                <div className="flex items-center justify-between mb-6 sticky top-0 bg-white pb-4 z-10 border-b border-slate-50">
-                    <div className="space-y-1">
-                      <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Forensic OCR Extraction</h3>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Bypassed Gemini mapping. Viewing raw spatial text.</p>
-                    </div>
-                    
-                    <div className="flex bg-slate-100 p-1 rounded-xl gap-1 border border-slate-200/50">
-                        <button
-                            onClick={() => setForensicType('CREDIT_CARD')}
-                            className={cn(
-                              "px-5 py-1.5 rounded-lg text-[10px] font-black tracking-widest transition-all uppercase", 
-                              forensicType === 'CREDIT_CARD' ? "bg-white shadow-sm text-slate-900" : "text-slate-400 hover:text-slate-600"
-                            )}
-                        >
-                            Credit Card
-                        </button>
-                        <button
-                            onClick={() => setForensicType('BANK')}
-                            className={cn(
-                              "px-5 py-1.5 rounded-lg text-[10px] font-black tracking-widest transition-all uppercase", 
-                              forensicType === 'BANK' ? "bg-white shadow-sm text-slate-900" : "text-slate-400 hover:text-slate-600"
-                            )}
-                        >
-                            Bank Account
-                        </button>
-                    </div>
-                    <Button 
-                        size="sm" 
-                        variant="default" 
-                        onClick={handleReprocess}
-                        disabled={reprocessing}
-                        className="gap-2 h-10 px-6 rounded-xl font-bold text-[10px] uppercase tracking-widest bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-200"
-                    >
-                        {reprocessing ? <IconLoader2 size={14} className="animate-spin" /> : <IconMath size={14} />}
-                        Run Gemini Audit
-                    </Button>
-                </div>
-                
-                <div className="space-y-8 mt-4">
-                    {data.rawAIResponse?.parsedResults?.map((page: any, pi: number) => (
-                        <div key={pi} className="space-y-3">
-                            <div className="flex items-center gap-3">
-                                <span className="text-[10px] font-black bg-slate-900 text-white px-3 py-1 rounded-full">PAGE {page.page}</span>
-                                <div className="h-px flex-1 bg-slate-100" />
-                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{page.text?.length || 0} characters</span>
-                            </div>
-                            <div className="relative group">
-                              <pre className="text-[12px] font-mono text-slate-600 bg-slate-50/50 p-6 rounded-2xl border border-slate-100 overflow-x-auto whitespace-pre-wrap leading-relaxed font-medium">
-                                  {page.text}
-                              </pre>
-                              <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Button size="icon" variant="ghost" className="h-8 w-8 bg-white/80 backdrop-blur" onClick={() => navigator.clipboard.writeText(page.text)}>
-                                  <IconDownload size={14} className="text-slate-400" />
-                                </Button>
-                              </div>
-                            </div>
-                        </div>
-                    ))}
+              <div className="flex items-center justify-between mb-6 sticky top-0 bg-white pb-4 z-10 border-b border-slate-50">
+                <div className="space-y-1">
+                  <h3 className="text-sm font-black uppercase tracking-widest text-slate-800">Forensic OCR Extraction</h3>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Bypassed Gemini mapping. Viewing raw spatial text.</p>
                 </div>
 
-                <div className="mt-12 pt-12 border-t border-slate-100 space-y-6">
-                    <div className="flex items-center justify-between">
-                        <div className="space-y-1">
-                            <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Neural Injection Vault</h4>
-                            <p className="text-[9px] font-bold text-slate-300 uppercase tracking-widest leading-none">Bypass AI logic with manual JSON data stream</p>
-                        </div>
-                        <Button 
-                            size="sm" 
-                            variant="ghost" 
-                            onClick={() => setShowVault(!showVault)}
-                            className={cn(
-                                "h-9 px-4 rounded-xl font-bold text-[10px] uppercase tracking-widest transition-all",
-                                showVault ? "bg-red-50 text-red-500 hover:bg-red-100" : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
-                            )}
-                        >
-                            <IconTerminal2 size={14} className="mr-2" />
-                            {showVault ? 'Seal Vault' : 'Access Vault'}
-                        </Button>
-                    </div>
-
-                    {showVault && (
-                        <div className="space-y-4 animate-in slide-in-from-top-4 duration-500">
-                            <div className="relative group">
-                                <textarea 
-                                    className="w-full h-80 font-mono text-[11px] p-6 bg-slate-900 text-emerald-400 border border-slate-800 rounded-3xl shadow-2xl focus-visible:outline-none focus:ring-2 focus:ring-emerald-500/20 leading-relaxed scrollbar-hide"
-                                    placeholder='{ "transactions": [...], "reconciliationSummary": {...} }'
-                                    value={injectedJson}
-                                    onChange={(e) => setInjectedJson(e.target.value)}
-                                />
-                                <div className="absolute top-4 right-4 flex items-center gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
-                                    <div className="text-[9px] font-black uppercase text-emerald-500 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20 backdrop-blur-md">manual/injection-v1</div>
-                                </div>
-                            </div>
-                            <Button 
-                                onClick={handleInjection}
-                                disabled={reprocessing || !injectedJson}
-                                className="w-full h-14 rounded-2xl font-black text-[11px] uppercase tracking-[0.2em] bg-emerald-600 hover:bg-emerald-700 shadow-xl shadow-emerald-200/50 gap-3 group transition-all active:scale-[0.99]"
-                            >
-                                {reprocessing ? <IconLoader2 size={18} className="animate-spin" /> : <IconPlayerPlay size={18} className="group-hover:translate-x-1 transition-transform" />}
-                                Overwrite Neural State
-                            </Button>
-                        </div>
+                <div className="flex bg-slate-100 p-1 rounded-xl gap-1 border border-slate-200/50">
+                  <button
+                    onClick={() => setForensicType('CREDIT_CARD')}
+                    className={cn(
+                      "px-5 py-1.5 rounded-lg text-[10px] font-black tracking-widest transition-all uppercase",
+                      forensicType === 'CREDIT_CARD' ? "bg-white shadow-sm text-slate-900" : "text-slate-400 hover:text-slate-600"
                     )}
+                  >
+                    Credit Card
+                  </button>
+                  <button
+                    onClick={() => setForensicType('BANK')}
+                    className={cn(
+                      "px-5 py-1.5 rounded-lg text-[10px] font-black tracking-widest transition-all uppercase",
+                      forensicType === 'BANK' ? "bg-white shadow-sm text-slate-900" : "text-slate-400 hover:text-slate-600"
+                    )}
+                  >
+                    Bank Account
+                  </button>
                 </div>
+                <Button
+                  size="sm"
+                  variant="default"
+                  onClick={handleReprocess}
+                  disabled={reprocessing}
+                  className="gap-2 h-10 px-6 rounded-xl font-bold text-[10px] uppercase tracking-widest bg-indigo-600 hover:bg-indigo-700 shadow-lg shadow-indigo-200"
+                >
+                  {reprocessing ? <IconLoader2 size={14} className="animate-spin" /> : <IconMath size={14} />}
+                  Run Gemini Audit
+                </Button>
+              </div>
+
+              <div className="space-y-8 mt-4">
+                {data.rawAIResponse?.parsedResults?.map((page: any, pi: number) => (
+                  <div key={pi} className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] font-black bg-slate-900 text-white px-3 py-1 rounded-full">PAGE {page.page}</span>
+                      <div className="h-px flex-1 bg-slate-100" />
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{page.text?.length || 0} characters</span>
+                    </div>
+                    <div className="relative group">
+                      <pre className="text-[12px] font-mono text-slate-600 bg-slate-50/50 p-6 rounded-2xl border border-slate-100 overflow-x-auto whitespace-pre-wrap leading-relaxed font-medium">
+                        {page.text}
+                      </pre>
+                      <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button size="icon" variant="ghost" className="h-8 w-8 bg-white/80 backdrop-blur" onClick={() => navigator.clipboard.writeText(page.text)}>
+                          <IconDownload size={14} className="text-slate-400" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-12 pt-12 border-t border-slate-100 space-y-6">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Neural Injection Vault</h4>
+                    <p className="text-[9px] font-bold text-slate-300 uppercase tracking-widest leading-none">Bypass AI logic with manual JSON data stream</p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setShowVault(!showVault)}
+                    className={cn(
+                      "h-9 px-4 rounded-xl font-bold text-[10px] uppercase tracking-widest transition-all",
+                      showVault ? "bg-red-50 text-red-500 hover:bg-red-100" : "bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+                    )}
+                  >
+                    <IconTerminal2 size={14} className="mr-2" />
+                    {showVault ? 'Seal Vault' : 'Access Vault'}
+                  </Button>
+                </div>
+
+                {showVault && (
+                  <div className="space-y-4 animate-in slide-in-from-top-4 duration-500">
+                    <div className="relative group">
+                      <textarea
+                        className="w-full h-80 font-mono text-[11px] p-6 bg-slate-900 text-emerald-400 border border-slate-800 rounded-3xl shadow-2xl focus-visible:outline-none focus:ring-2 focus:ring-emerald-500/20 leading-relaxed scrollbar-hide"
+                        placeholder='{ "transactions": [...], "reconciliationSummary": {...} }'
+                        value={injectedJson}
+                        onChange={(e) => setInjectedJson(e.target.value)}
+                      />
+                      <div className="absolute top-4 right-4 flex items-center gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                        <div className="text-[9px] font-black uppercase text-emerald-500 bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/20 backdrop-blur-md">manual/injection-v1</div>
+                      </div>
+                    </div>
+                    <Button
+                      onClick={handleInjection}
+                      disabled={reprocessing || !injectedJson}
+                      className="w-full h-14 rounded-2xl font-black text-[11px] uppercase tracking-[0.2em] bg-emerald-600 hover:bg-emerald-700 shadow-xl shadow-emerald-200/50 gap-3 group transition-all active:scale-[0.99]"
+                    >
+                      {reprocessing ? <IconLoader2 size={18} className="animate-spin" /> : <IconPlayerPlay size={18} className="group-hover:translate-x-1 transition-transform" />}
+                      Overwrite Neural State
+                    </Button>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1492,10 +1533,10 @@ function Statement() {
                     {emi.tenure && emi.paidInstallments && (
                       <div className="flex items-center gap-1">
                         <div className="h-1 w-12 bg-slate-100 rounded-full overflow-hidden">
-                           <div 
-                             className="h-full bg-emerald-500 rounded-full" 
-                             style={{ width: `${Math.min(100, (emi.paidInstallments / emi.tenure) * 100)}%` }}
-                           />
+                          <div
+                            className="h-full bg-emerald-500 rounded-full"
+                            style={{ width: `${Math.min(100, (emi.paidInstallments / emi.tenure) * 100)}%` }}
+                          />
                         </div>
                         <span className="text-[9px] font-black text-slate-400">{Math.round((emi.paidInstallments / emi.tenure) * 100)}%</span>
                       </div>
@@ -1620,7 +1661,7 @@ function Statement() {
             )}
           </div>
         )}
-        
+
         {/* ── Tab: History ── */}
         {tab === 'history' && data && data.versions && (
           <div className="flex-1 overflow-auto p-8 space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-400">
@@ -1628,7 +1669,7 @@ function Statement() {
               <h3 className="text-sm font-black text-slate-800 uppercase tracking-tighter mb-1">Audit Version History</h3>
               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Historical Snapshots from Re-Ingestion Cycles</p>
             </div>
-            
+
             <div className="grid gap-4">
               {[...data.versions].reverse().map((ver, idx) => (
                 <div key={idx} className="group bg-white border border-slate-100 rounded-3xl p-6 hover:shadow-xl hover:border-slate-200 transition-all border-l-4 border-l-slate-200 hover:border-l-primary">
@@ -1647,13 +1688,13 @@ function Statement() {
                         )}>{ver.extractionQuality?.replace('_', ' ')?.toUpperCase()}</span>
                       </p>
                     </div>
-                    
+
                     <div className="flex gap-4">
-                       <MetricCard label="Transactions" value={String(ver.transactions?.length || 0)} small />
-                       <MetricCard label="Matched" value={ver.reconciliation?.matched ? 'YES' : 'NO'} color={ver.reconciliation?.matched ? 'text-emerald-600' : 'text-red-500'} small />
+                      <MetricCard label="Transactions" value={String(ver.transactions?.length || 0)} small />
+                      <MetricCard label="Matched" value={ver.reconciliation?.matched ? 'YES' : 'NO'} color={ver.reconciliation?.matched ? 'text-emerald-600' : 'text-red-500'} small />
                     </div>
                   </div>
-                  
+
                   {ver.summary && (
                     <div className="mt-4 p-4 bg-slate-50/50 rounded-2xl border border-slate-100 italic text-[11px] text-slate-500 leading-relaxed line-clamp-2 hover:line-clamp-none transition-all cursor-default">
                       "{ver.summary}"
@@ -1661,9 +1702,9 @@ function Statement() {
                   )}
 
                   <div className="mt-4 flex justify-end">
-                    <Button 
-                      variant="ghost" 
-                      size="sm" 
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => {
                         window.alert(`Snapshot Sequence ID: VER-${data.versions!.length - idx}\n\nHistorical extraction data for this sequence is archived. You can inspect the 'versions' field in the raw JSON payload if needed.`);
                       }}
@@ -1702,128 +1743,128 @@ function Statement() {
           <div className="absolute inset-0 bg-transparent" onClick={() => setShowMathDetails(false)} />
           <div className="relative w-full max-w-[34rem] bg-white/95 backdrop-blur-xl rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-slate-200 pointer-events-auto">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
-               <div className="flex items-center gap-3">
-                 <div className={cn("p-2 rounded-xl", 
-                   data.extractionQuality === 'verified' ? "bg-emerald-100 text-emerald-600" :
-                   data.extractionQuality === 'minor_mismatch' ? "bg-amber-100 text-amber-600" :
-                   "bg-red-100 text-red-600"
-                 )}>
-                   <IconMath size={20} strokeWidth={2.5} />
-                 </div>
-                 <div>
-                   <h3 className="text-base font-black text-slate-800 tracking-tight">Mathematical Proof</h3>
-                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Reconciliation Engine</p>
-                 </div>
-               </div>
-               <button onClick={() => setShowMathDetails(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors">
-                 <IconX size={20} />
-               </button>
+              <div className="flex items-center gap-3">
+                <div className={cn("p-2 rounded-xl",
+                  data.extractionQuality === 'verified' ? "bg-emerald-100 text-emerald-600" :
+                    data.extractionQuality === 'minor_mismatch' ? "bg-amber-100 text-amber-600" :
+                      "bg-red-100 text-red-600"
+                )}>
+                  <IconMath size={20} strokeWidth={2.5} />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-800 tracking-tight">Mathematical Proof</h3>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Reconciliation Engine</p>
+                </div>
+              </div>
+              <button onClick={() => setShowMathDetails(false)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors">
+                <IconX size={20} />
+              </button>
             </div>
 
             <div className="p-6 space-y-6">
-               <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-4 text-center relative z-10">
-                 <div 
-                   className="flex flex-col gap-1.5 cursor-pointer hover:bg-slate-100 p-2 rounded-xl border border-transparent hover:border-slate-200 transition-all active:scale-95 group"
-                   onClick={() => {
-                     const field = isBank ? (data.openingBalance || data.reconciliationSummary?.openingBalance) : data.previousBalance;
-                     if (field?.box?.length && field.page) {
-                       setActiveBox({ box: field.box, page: field.page, id: 'opening' })
-                       document.getElementById(`pdf-page-${field.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                     } else {
-                       setToast({ message: "Bounding box not identified for Opening Balance", visible: true, type: 'error' });
-                       setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
-                     }
-                   }}
-                 >
-                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-100 py-0.5 rounded text-[8px] group-hover:bg-slate-200">Printed</span>
-                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Opening<br/>Balance</span>
-                   <span className="text-sm font-black tabular-nums">{fmt(data.reconciliationSummary?.openingBalance || 0, sym)}</span>
-                 </div>
-                 
-                 <div className="flex items-center justify-center text-slate-300"><IconPlus size={16} /></div>
-                 
-                 <div className="flex flex-col gap-1.5 p-2 border border-dashed border-sky-200 rounded-xl bg-sky-50/50">
-                   <span className="text-[10px] font-bold text-sky-400 uppercase tracking-widest bg-sky-100/50 py-0.5 rounded text-[8px]">Calculated</span>
-                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Extracted<br/>{isBank ? 'Deposits' : 'Debits'}</span>
-                   <span className={cn("text-sm font-black tabular-nums", isBank ? "text-emerald-600" : "text-red-600")}>
-                     {fmt(isBank ? (data.reconciliation.extractedDeposits || 0) : (data.reconciliation.extractedDebits || 0), sym)}
-                   </span>
-                 </div>
-                 
-                 <div className="flex items-center justify-center text-slate-300"><IconMinus size={16} /></div>
-                 
-                 <div className="flex flex-col gap-1.5 p-2 border border-dashed border-orange-200 rounded-xl bg-orange-50/50">
-                   <span className="text-[10px] font-bold text-orange-400 uppercase tracking-widest bg-orange-100/50 py-0.5 rounded text-[8px]">Calculated</span>
-                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Extracted<br/>{isBank ? 'Withdrawals' : 'Credits'}</span>
-                   <span className={cn("text-sm font-black tabular-nums", isBank ? "text-red-600" : "text-emerald-600")}>
-                     {fmt(isBank ? (data.reconciliation.extractedWithdrawals || 0) : (data.reconciliation.extractedCredits || 0), sym)}
-                   </span>
-                 </div>
-               </div>
-
-               <div className="bg-slate-50 rounded-2xl border border-slate-200 p-5 flex items-center justify-between shadow-inner">
-                 <div className="flex flex-col gap-1">
-                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0">Calculated Net</span>
-                   <span className="text-xl font-black tabular-nums text-slate-800">{fmt(data.reconciliation.calculatedClosing || 0, sym)}</span>
-                 </div>
-                 
-                 <div className="flex justify-center text-slate-300 shrink-0"><IconEqual size={24} /></div>
-                 
-                 <div 
-                   className="flex flex-col gap-1 text-right cursor-pointer hover:bg-slate-200/50 p-2 -my-2 -mr-2 rounded-xl transition-all active:scale-95"
-                   onClick={() => {
-                     const field = isBank ? (data.closingBalance || data.outstandingTotal) : data.outstandingTotal;
-                     if (field?.box?.length && field.page) {
-                       setActiveBox({ box: field.box, page: field.page, id: 'closing' })
-                       document.getElementById(`pdf-page-${field.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                     } else {
-                       setToast({ message: "Bounding box not identified for Closing Balance", visible: true, type: 'error' });
-                       setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
-                     }
-                   }}
-                 >
-                   <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0 bg-slate-200/50 px-2 py-0.5 rounded inline-flex self-end items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" /> Printed PDF Box</span>
-                   <span className={cn("text-xl font-black tabular-nums",
-                      data.reconciliation.matched ? "text-emerald-500" :
-                      data.reconciliation.balanceDelta < 10 ? "text-amber-500" : "text-red-500"
-                   )}>
-                     {fmt(data.reconciliation.expectedClosing || 0, sym)}
-                   </span>
-                 </div>
-               </div>
-
-               <div className={cn("px-5 py-3 rounded-xl flex items-center justify-between border",
-                 data.reconciliation.matched ? "bg-emerald-50 border-emerald-100" :
-                 data.reconciliation.balanceDelta < 10 ? "bg-amber-50 border-amber-100" : "bg-red-50 border-red-100"
-               )}>
-                 <span className={cn("text-xs font-bold", 
-                   data.reconciliation.matched ? "text-emerald-800" :
-                   data.reconciliation.balanceDelta < 10 ? "text-amber-800" : "text-red-800"
-                 )}>
-                   {data.reconciliation.matched ? "Extraction mathematically flawless." : `Discrepancy of ${fmt(data.reconciliation.balanceDelta, sym)} detected.`}
-                 </span>
-                 <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest bg-white/50 px-2 py-1 rounded-lg">
-                   {data.reconciliation.transactionCount} Extracted
-                 </span>
+              <div className="grid grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-4 text-center relative z-10">
+                <div
+                  className="flex flex-col gap-1.5 cursor-pointer hover:bg-slate-100 p-2 rounded-xl border border-transparent hover:border-slate-200 transition-all active:scale-95 group"
+                  onClick={() => {
+                    const field = isBank ? (data.openingBalance || data.reconciliationSummary?.openingBalance) : data.previousBalance;
+                    if (field?.box?.length && field.page) {
+                      setActiveBox({ box: field.box, page: field.page, id: 'opening' })
+                      document.getElementById(`pdf-page-${field.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    } else {
+                      setToast({ message: "Bounding box not identified for Opening Balance", visible: true, type: 'error' });
+                      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+                    }
+                  }}
+                >
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest bg-slate-100 py-0.5 rounded text-[8px] group-hover:bg-slate-200">Printed</span>
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Opening<br />Balance</span>
+                  <span className="text-sm font-black tabular-nums">{fmt(data.reconciliationSummary?.openingBalance || 0, sym)}</span>
                 </div>
 
-                {data.reconciliation.reasons && data.reconciliation.reasons.length > 0 && (
-                  <div className="bg-red-50/50 border border-red-100/50 rounded-2xl p-5 space-y-3 mt-4">
-                    <div className="flex items-center gap-1.5">
-                       <IconAlertTriangle size={14} className="text-red-500" />
-                       <span className="text-[10px] font-black text-red-600 uppercase tracking-widest">Diagnostic Findings</span>
-                    </div>
-                    <ul className="space-y-2">
-                       {data.reconciliation.reasons.map((reason, i) => (
-                         <li key={i} className="flex items-start gap-2 text-xs font-semibold text-slate-600 leading-tight">
-                           <span className="h-1 w-2 rounded-full bg-red-400 mt-1.5 shrink-0" />
-                           {reason}
-                         </li>
-                       ))}
-                    </ul>
+                <div className="flex items-center justify-center text-slate-300"><IconPlus size={16} /></div>
+
+                <div className="flex flex-col gap-1.5 p-2 border border-dashed border-sky-200 rounded-xl bg-sky-50/50">
+                  <span className="text-[10px] font-bold text-sky-400 uppercase tracking-widest bg-sky-100/50 py-0.5 rounded text-[8px]">Calculated</span>
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Extracted<br />{isBank ? 'Deposits' : 'Debits'}</span>
+                  <span className={cn("text-sm font-black tabular-nums", isBank ? "text-emerald-600" : "text-red-600")}>
+                    {fmt(isBank ? (data.reconciliation.extractedDeposits || 0) : (data.reconciliation.extractedDebits || 0), sym)}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-center text-slate-300"><IconMinus size={16} /></div>
+
+                <div className="flex flex-col gap-1.5 p-2 border border-dashed border-orange-200 rounded-xl bg-orange-50/50">
+                  <span className="text-[10px] font-bold text-orange-400 uppercase tracking-widest bg-orange-100/50 py-0.5 rounded text-[8px]">Calculated</span>
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest leading-tight mt-1">Extracted<br />{isBank ? 'Withdrawals' : 'Credits'}</span>
+                  <span className={cn("text-sm font-black tabular-nums", isBank ? "text-red-600" : "text-emerald-600")}>
+                    {fmt(isBank ? (data.reconciliation.extractedWithdrawals || 0) : (data.reconciliation.extractedCredits || 0), sym)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="bg-slate-50 rounded-2xl border border-slate-200 p-5 flex items-center justify-between shadow-inner">
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0">Calculated Net</span>
+                  <span className="text-xl font-black tabular-nums text-slate-800">{fmt(data.reconciliation.calculatedClosing || 0, sym)}</span>
+                </div>
+
+                <div className="flex justify-center text-slate-300 shrink-0"><IconEqual size={24} /></div>
+
+                <div
+                  className="flex flex-col gap-1 text-right cursor-pointer hover:bg-slate-200/50 p-2 -my-2 -mr-2 rounded-xl transition-all active:scale-95"
+                  onClick={() => {
+                    const field = isBank ? (data.closingBalance || data.outstandingTotal) : data.outstandingTotal;
+                    if (field?.box?.length && field.page) {
+                      setActiveBox({ box: field.box, page: field.page, id: 'closing' })
+                      document.getElementById(`pdf-page-${field.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    } else {
+                      setToast({ message: "Bounding box not identified for Closing Balance", visible: true, type: 'error' });
+                      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+                    }
+                  }}
+                >
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest shrink-0 bg-slate-200/50 px-2 py-0.5 rounded inline-flex self-end items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" /> Printed PDF Box</span>
+                  <span className={cn("text-xl font-black tabular-nums",
+                    data.reconciliation.matched ? "text-emerald-500" :
+                      data.reconciliation.balanceDelta < 10 ? "text-amber-500" : "text-red-500"
+                  )}>
+                    {fmt(data.reconciliation.expectedClosing || 0, sym)}
+                  </span>
+                </div>
+              </div>
+
+              <div className={cn("px-5 py-3 rounded-xl flex items-center justify-between border",
+                data.reconciliation.matched ? "bg-emerald-50 border-emerald-100" :
+                  data.reconciliation.balanceDelta < 10 ? "bg-amber-50 border-amber-100" : "bg-red-50 border-red-100"
+              )}>
+                <span className={cn("text-xs font-bold",
+                  data.reconciliation.matched ? "text-emerald-800" :
+                    data.reconciliation.balanceDelta < 10 ? "text-amber-800" : "text-red-800"
+                )}>
+                  {data.reconciliation.matched ? "Extraction mathematically flawless." : `Discrepancy of ${fmt(data.reconciliation.balanceDelta, sym)} detected.`}
+                </span>
+                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest bg-white/50 px-2 py-1 rounded-lg">
+                  {data.reconciliation.transactionCount} Extracted
+                </span>
+              </div>
+
+              {data.reconciliation.reasons && data.reconciliation.reasons.length > 0 && (
+                <div className="bg-red-50/50 border border-red-100/50 rounded-2xl p-5 space-y-3 mt-4">
+                  <div className="flex items-center gap-1.5">
+                    <IconAlertTriangle size={14} className="text-red-500" />
+                    <span className="text-[10px] font-black text-red-600 uppercase tracking-widest">Diagnostic Findings</span>
                   </div>
-                )}
-             </div>
+                  <ul className="space-y-2">
+                    {data.reconciliation.reasons.map((reason, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs font-semibold text-slate-600 leading-tight">
+                        <span className="h-1 w-2 rounded-full bg-red-400 mt-1.5 shrink-0" />
+                        {reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -1833,40 +1874,40 @@ function Statement() {
         <div className="fixed inset-0 z-[3000] flex items-center justify-center p-6 sm:p-12">
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" onClick={() => setShowRawJson(false)} />
           <div className="relative w-full max-w-5xl h-full max-h-[85vh] bg-[#0d1117] rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col border border-white/10 animate-in fade-in zoom-in-95 duration-300">
-             <div className="px-8 py-6 border-b border-white/5 flex items-center justify-between shrink-0 bg-slate-900">
-                <div className="flex items-center gap-4">
-                  <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">
-                    <IconMath size={20} className="text-primary" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-black text-white uppercase tracking-tight">Neural Raw Capture</h2>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Gemini 2.5 Flash Lite Production Payload</p>
-                  </div>
+            <div className="px-8 py-6 border-b border-white/5 flex items-center justify-between shrink-0 bg-slate-900">
+              <div className="flex items-center gap-4">
+                <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                  <IconMath size={20} className="text-primary" />
                 </div>
-                <button onClick={() => setShowRawJson(false)} className="h-10 w-10 flex items-center justify-center rounded-full hover:bg-white/10 text-slate-400 transition-colors">
-                  <IconX size={20} />
-                </button>
-             </div>
+                <div>
+                  <h2 className="text-lg font-black text-white uppercase tracking-tight">Neural Raw Capture</h2>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Gemini 2.5 Flash Lite Production Payload</p>
+                </div>
+              </div>
+              <button onClick={() => setShowRawJson(false)} className="h-10 w-10 flex items-center justify-center rounded-full hover:bg-white/10 text-slate-400 transition-colors">
+                <IconX size={20} />
+              </button>
+            </div>
 
-             <div className="flex-1 overflow-auto p-8 font-mono text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap">
-                {data.rawAIResponse ? JSON.stringify(data.rawAIResponse, null, 2) : "No raw response stored for this record."}
-             </div>
+            <div className="flex-1 overflow-auto p-8 font-mono text-[11px] leading-relaxed text-slate-300 whitespace-pre-wrap">
+              {data.rawAIResponse ? JSON.stringify(data.rawAIResponse, null, 2) : "No raw response stored for this record."}
+            </div>
 
-             <div className="px-8 py-4 bg-slate-900/50 border-t border-white/5 flex items-center justify-between shrink-0">
-                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-[0.2em]">Source: Structured Extraction v2.5 (Authenticated)</p>
-                <Button 
-                   size="sm" 
-                   variant="outline" 
-                   className="rounded-xl border-white/10 text-white hover:bg-white/5"
-                   onClick={() => {
-                        navigator.clipboard.writeText(JSON.stringify(data.rawAIResponse, null, 2));
-                        setToast({ message: "Payload copied to clipboard", visible: true, type: 'success' });
-                        setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
-                   }}
-                >
-                    Copy JSON
-                </Button>
-             </div>
+            <div className="px-8 py-4 bg-slate-900/50 border-t border-white/5 flex items-center justify-between shrink-0">
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-[0.2em]">Source: Structured Extraction v2.5 (Authenticated)</p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="rounded-xl border-white/10 text-white hover:bg-white/5"
+                onClick={() => {
+                  navigator.clipboard.writeText(JSON.stringify(data.rawAIResponse, null, 2));
+                  setToast({ message: "Payload copied to clipboard", visible: true, type: 'success' });
+                  setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+                }}
+              >
+                Copy JSON
+              </Button>
+            </div>
           </div>
         </div>
       )}
