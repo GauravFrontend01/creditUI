@@ -3,7 +3,7 @@ const VendorRule = require('../models/VendorRule');
 const { createClient } = require('@supabase/supabase-js');
 const path = require('path');
 const { processStatementInBackground: processStatement, mapAIResponseToStatement } = require('../services/backgroundProcessor');
-const { decryptPdf } = require('../services/pdfService');
+const { decryptPdf, createPdfFromImages } = require('../services/pdfService');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -433,5 +433,34 @@ exports.downloadUnlockedPdf = async (req, res) => {
   } catch (error) {
     console.error('downloadUnlockedPdf error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @desc    Rebuild PDF from images (Forensic Reassembly)
+// @route   POST /api/statements/rebuild-pdf
+// @access  Private
+exports.rebuildPdfFromImages = async (req, res) => {
+  try {
+    const { images, filename } = req.body;
+    if (!images || !Array.isArray(images) || images.length === 0) {
+      return res.status(400).json({ message: 'No images provided for PDF reconstruction' });
+    }
+
+    console.log(`[Forensic] Rebuilding PDF: ${filename || 'reconstructed.pdf'} with ${images.length} pages...`);
+
+    // Convert Base64 strings to Buffers
+    const buffers = images.map(img => {
+      const base64Data = img.replace(/^data:image\/\w+;base64,/, "");
+      return Buffer.from(base64Data, 'base64');
+    });
+
+    const pdfBuffer = await createPdfFromImages(buffers);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename || 'reconstructed_forensic.pdf'}"`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('rebuildPdfFromImages error:', error);
+    res.status(500).json({ message: 'Server error during PDF reconstruction', detail: error.message });
   }
 };

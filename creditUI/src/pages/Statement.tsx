@@ -858,7 +858,7 @@ function Statement() {
 
   const handleDownloadUnlocked = async () => {
     if (!id) {
-      // Handle session-only view (already unlocked usually, or from memory)
+      // Session only: Rebuild locally if possible or from memory
       const b64 = sessionStorage.getItem('pdf_base64');
       if (b64) {
         const link = document.createElement('a');
@@ -869,7 +869,15 @@ function Statement() {
       return;
     }
 
+    // NEW: Use Forensic Reconstruction from images
+    if (pages.length > 0) {
+      console.log(`[Forensic] Triggering reconstruction for ${pages.length} pages.`);
+      handleRebuildDownload();
+      return;
+    }
+
     try {
+      console.log(`[Forensic] Attempting standard unlocked download for ID: ${id}`);
       const response = await api.get(`/api/statements/${id}/download-unlocked`, {
         responseType: 'blob'
       });
@@ -885,6 +893,44 @@ function Statement() {
     } catch (e) {
       console.error('Download failed', e);
       setToast({ message: "Failed to download unlocked PDF", visible: true, type: 'error' });
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+    }
+  };
+
+  const handleRebuildDownload = async () => {
+    if (pages.length === 0) {
+      console.warn("[Forensic] Reconstruction requested but no pages found in state.");
+      return;
+    }
+    
+    console.log(`[Forensic] Packaging ${pages.length} images for backend reassembly...`);
+    setToast({ message: "Reconstructing forensic PDF...", visible: true, type: 'success' });
+    setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 2000);
+
+    try {
+      // Get the image URLs (handles both simple strings or objects with 'image' property)
+      const imageUrls = pages.map(p => typeof p === 'string' ? p : p.image);
+      
+      const response = await api.post('/api/statements/rebuild-pdf', {
+        images: imageUrls,
+        filename: `${data?.bankName?.val || 'statement'}_unlocked_forensic.pdf`
+      }, {
+        responseType: 'blob'
+      });
+
+      console.log("[Forensic] PDF Bytes received. Triggering browser download...");
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${data?.bankName?.val || 'statement'}_unlocked_forensic.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Forensic rebuild failed', e);
+      setToast({ message: "PDF reconstruction failed. Standard download attempted.", visible: true, type: 'error' });
       setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
     }
   };
@@ -1152,6 +1198,14 @@ function Statement() {
              </p>
 
              <div className="flex flex-col gap-4 w-full max-w-sm">
+                <Button 
+                  variant="outline"
+                  onClick={handleDownloadUnlocked}
+                  className="rounded-2xl h-14 border-slate-200 text-slate-600 font-bold uppercase tracking-widest gap-2 hover:bg-slate-50 transition-all mb-2"
+                >
+                  <IconDownload size={18} /> Download Unlocked PDF
+                </Button>
+
                 <div className="flex bg-slate-100 p-1 rounded-2xl gap-1 border border-slate-200/50 mb-4">
                   <button
                     onClick={() => setForensicType('CREDIT_CARD')}
@@ -1243,12 +1297,22 @@ function Statement() {
             </div>
             <div className="flex items-center gap-4">
               {isSavedView && !data.isApproved && data.status === 'COMPLETED' && (
-                <Button
-                  onClick={confirmApproval}
-                  className="rounded-xl px-6 h-11 gap-2 bg-emerald-600 hover:bg-emerald-700 shadow-[0_8px_16px_-6px_rgba(16,185,129,0.3)] font-bold text-xs uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98]"
-                >
-                  <IconCheck size={16} strokeWidth={3} /> Approve Audit
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    onClick={confirmApproval}
+                    className="rounded-xl px-6 h-11 gap-2 bg-emerald-600 hover:bg-emerald-700 shadow-[0_8px_16px_-6px_rgba(16,185,129,0.3)] font-bold text-xs uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    <IconCheck size={16} strokeWidth={3} /> Verify & Download
+                  </Button>
+                  
+                  <Button
+                    onClick={handleDownloadUnlocked}
+                    variant="outline"
+                    className="rounded-xl px-6 h-11 gap-2 border-primary text-primary hover:bg-primary/5 font-bold text-xs uppercase tracking-widest transition-all"
+                  >
+                    <IconDownload size={16} /> Unlocked PDF
+                  </Button>
+                </div>
               )}
 
               {isSavedView && (

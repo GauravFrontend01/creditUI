@@ -84,7 +84,39 @@ async function extractTextWithPdfJs(buffer, password, pagesToExtract = null) {
   return fullText;
 }
 
+/**
+ * Reconstructs a new PDF from a list of image buffers.
+ * @param {Buffer[]} imageBuffers 
+ * @returns {Promise<Buffer>}
+ */
+async function createPdfFromImages(imageBuffers) {
+  const sharp = require('sharp');
+  const newPdf = await PDFDocument.create();
+
+  for (const buffer of imageBuffers) {
+    // Standardize to JPEG for compression/size management
+    const processedImage = await sharp(buffer)
+      .toFormat('jpeg', { quality: 80 })
+      .toBuffer();
+
+    const image = await newPdf.embedJpg(processedImage);
+    const { width, height } = image.scale(1.0);
+    const page = newPdf.addPage([width, height]);
+    
+    page.drawImage(image, {
+      x: 0,
+      y: 0,
+      width: width,
+      height: height,
+    });
+  }
+
+  const pdfBytes = await newPdf.save();
+  return Buffer.from(pdfBytes);
+}
+
 module.exports = {
   decryptPdf,
-  extractTextWithPdfJs
+  extractTextWithPdfJs,
+  createPdfFromImages
 };
