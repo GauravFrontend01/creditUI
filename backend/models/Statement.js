@@ -135,6 +135,8 @@ const statementSchema = new mongoose.Schema({
   },
   processingError: String,
   isApproved: { type: Boolean, default: false },
+  /** User explicitly dismissed this extraction (distinct from “not yet reviewed”). */
+  isUserRejected: { type: Boolean, default: false },
   ocrEngine: {
     type: String,
     enum: ['gemini', 'ocr_space', 'ocr_space_v1', 'ocr_space_v2', 'ocr_space_v3', 'ocr_mistral', 'groq_llama', 'mistral_llama_hybrid', 'gemini_vision_native'],

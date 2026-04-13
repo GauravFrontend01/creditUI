@@ -48,8 +48,10 @@ interface Statement {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-const fmt = (val?: number) =>
-  val !== undefined ? `₹${val.toLocaleString("en-IN", { minimumFractionDigits: 2 })}` : "—"
+const fmt = (val?: number | null) =>
+  typeof val === "number" && !Number.isNaN(val)
+    ? `₹${val.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`
+    : "—"
 
 const utilizationColor = (pct: number) => {
   if (pct >= 80) return "text-red-600 bg-red-50"
@@ -154,11 +156,26 @@ function StatementGroup({ name, accNum, items, navigate, fmt }: GroupProps) {
 
             {items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).map(st => {
               const status = st.status || "COMPLETED"
+              const extracting = status === "PENDING" || status === "PROCESSING"
               return (
                 <div 
                   key={st._id}
-                  onClick={() => navigate(`/statements/${st._id}`)}
-                  className="grid grid-cols-12 items-center px-6 py-4 rounded-2xl bg-slate-50/30 hover:bg-white hover:shadow-md border border-transparent hover:border-slate-100 transition-all cursor-pointer group"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    if (extracting) return
+                    navigate(`/statements/${st._id}`)
+                  }}
+                  onKeyDown={(e) => {
+                    if (extracting) return
+                    if (e.key === "Enter" || e.key === " ") navigate(`/statements/${st._id}`)
+                  }}
+                  className={cn(
+                    "grid grid-cols-12 items-center px-6 py-4 rounded-2xl bg-slate-50/30 border border-transparent transition-all group",
+                    extracting
+                      ? "cursor-not-allowed opacity-70"
+                      : "hover:bg-white hover:shadow-md hover:border-slate-100 cursor-pointer"
+                  )}
                 >
                   <div className="col-span-4 flex items-center gap-3">
                     <div className="h-8 w-8 rounded-lg bg-white border border-slate-100 flex items-center justify-center text-slate-400 group-hover:text-primary transition-colors shadow-sm">
@@ -186,18 +203,23 @@ function StatementGroup({ name, accNum, items, navigate, fmt }: GroupProps) {
                     {st.type === "BANK"
                       ? (
                         <div className="flex flex-col items-end">
-                           <span className="text-emerald-600">+{st.totalDeposits?.val?.toLocaleString() || '0'}</span>
-                           <span className="text-red-400 text-[10px]">-{st.totalWithdrawals?.val?.toLocaleString() || '0'}</span>
+                           <span className="text-emerald-600">+{fmt(st.totalDeposits?.val)}</span>
+                           <span className="text-red-400 text-[10px]">-{fmt(st.totalWithdrawals?.val)}</span>
                         </div>
                       )
                       : fmt(st.minPaymentDue?.val)}
                   </div>
 
                   <div className="col-span-2 flex justify-center">
-                    {status === "PROCESSING" ? (
+                    {extracting ? (
                       <div className="flex items-center gap-1.5 text-amber-500 font-bold text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-50 border border-amber-100/50">
                         <IconLoader2 size={10} className="animate-spin" />
-                        Linking
+                        Extracting
+                      </div>
+                    ) : status === "FAILED" ? (
+                      <div className="flex items-center gap-1.5 text-red-600 font-bold text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-50 border border-red-100/50">
+                        <IconAlertCircle size={10} />
+                        Failed
                       </div>
                     ) : st.isApproved ? (
                       <div className="flex items-center gap-1.5 text-emerald-600 font-bold text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-100/50">
@@ -213,7 +235,10 @@ function StatementGroup({ name, accNum, items, navigate, fmt }: GroupProps) {
                   </div>
 
                   <div className="col-span-2 flex justify-end pr-2">
-                    <span className="text-[10px] font-bold text-primary uppercase tracking-wider">View</span>
+                    <span className={cn(
+                      "text-[10px] font-bold uppercase tracking-wider",
+                      extracting ? "text-slate-400" : "text-primary"
+                    )}>{extracting ? "Wait" : "View"}</span>
                   </div>
                 </div>
               )
@@ -313,13 +338,13 @@ export default function StatementsList() {
     statements.forEach(s => {
       if (globalFilter) {
         const q = globalFilter.toLowerCase()
-        const bankMatch = s.bankName.val.toLowerCase().includes(q)
+        const bankMatch = (s.bankName?.val || "").toLowerCase().includes(q)
         const accMatch = (s.accountNumber?.val || "").toLowerCase().includes(q)
         const periodMatch = `${s.statementPeriod?.from || ""} ${s.statementPeriod?.to || ""}`.toLowerCase().includes(q)
         if (!bankMatch && !accMatch && !periodMatch) return
       }
 
-      const bankKey = s.bankName.val || "Unknown Bank"
+      const bankKey = s.bankName?.val || "Unknown Bank"
       const accKey = s.accountNumber?.val || "N/A"
       const key = `${bankKey}-${accKey}`
 

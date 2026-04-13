@@ -1,5 +1,10 @@
 const Statement = require('../models/Statement');
-const { processStatementPdf, refreshSignedUrl } = require('../services/statementPipelineService');
+const {
+  processStatementPdf,
+  refreshSignedUrl,
+  reIngestStatementById,
+  applyExtraction,
+} = require('../services/statementPipelineService');
 
 // @desc    Manual upload: unlock -> store -> Vertex -> save
 // @route   POST /api/statements
@@ -65,6 +70,84 @@ exports.getStatementById = async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @route   PUT /api/statements/:id/approve
+exports.approveStatement = async (req, res) => {
+  try {
+    const statement = await Statement.findById(req.params.id);
+    if (!statement || statement.user.toString() !== req.user._id.toString()) {
+      return res.status(404).json({ message: 'Statement not found' });
+    }
+    statement.isApproved = true;
+    statement.isUserRejected = false;
+    await statement.save();
+    const pdfStorageUrl = await refreshSignedUrl(statement.pdfFileName, statement.pdfStorageUrl);
+    res.json({ ...statement.toObject(), pdfStorageUrl });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @route   PUT /api/statements/:id/reject
+exports.rejectStatement = async (req, res) => {
+  try {
+    const statement = await Statement.findById(req.params.id);
+    if (!statement || statement.user.toString() !== req.user._id.toString()) {
+      return res.status(404).json({ message: 'Statement not found' });
+    }
+    statement.isApproved = false;
+    statement.isUserRejected = true;
+    await statement.save();
+    const pdfStorageUrl = await refreshSignedUrl(statement.pdfFileName, statement.pdfStorageUrl);
+    res.json({ ...statement.toObject(), pdfStorageUrl });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @route   POST /api/statements/:id/re-ingest
+exports.reIngestStatement = async (req, res) => {
+  try {
+    const statement = await reIngestStatementById(req.user._id, req.params.id);
+    const pdfStorageUrl = await refreshSignedUrl(statement.pdfFileName, statement.pdfStorageUrl);
+    res.json({ ...statement.toObject(), pdfStorageUrl });
+  } catch (error) {
+    console.error('reIngestStatement', error);
+    const msg = error.message || 'Re-ingest failed';
+    if (msg === 'Statement not found') return res.status(404).json({ message: msg });
+    res.status(500).json({ message: msg });
+  }
+};
+
+/**
+ * @route POST /api/statements/:id/reprocess
+ * Re-run AI on stored PDF, or apply a manual JSON payload when provided.
+ */
+exports.reprocessStatement = async (req, res) => {
+  try {
+    const { manualExtraction } = req.body || {};
+    if (manualExtraction && typeof manualExtraction === 'object') {
+      const statement = await Statement.findById(req.params.id);
+      if (!statement || statement.user.toString() !== req.user._id.toString()) {
+        return res.status(404).json({ message: 'Statement not found' });
+      }
+      applyExtraction(statement, manualExtraction);
+      await statement.save();
+      const pdfStorageUrl = await refreshSignedUrl(statement.pdfFileName, statement.pdfStorageUrl);
+      return res.json({ statement: { ...statement.toObject(), pdfStorageUrl } });
+    }
+    const statement = await reIngestStatementById(req.user._id, req.params.id);
+    const pdfStorageUrl = await refreshSignedUrl(statement.pdfFileName, statement.pdfStorageUrl);
+    res.json({ statement: { ...statement.toObject(), pdfStorageUrl } });
+  } catch (error) {
+    console.error('reprocessStatement', error);
+    const msg = error.message || 'Reprocess failed';
+    if (msg === 'Statement not found') return res.status(404).json({ message: msg });
+    res.status(500).json({ message: msg });
   }
 };
 

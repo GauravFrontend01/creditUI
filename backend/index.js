@@ -7,6 +7,7 @@ const cors = require('cors');
 const userRoutes = require('./routes/userRoutes');
 const statementRoutes = require('./routes/statementRoutes');
 const gmailRoutes = require('./routes/gmailRoutes');
+const vendorRulesRoutes = require('./routes/vendorRulesRoutes');
 
 const app = express();
 
@@ -28,6 +29,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/api/users', userRoutes);
 app.use('/api/statements', statementRoutes);
 app.use('/api/gmail', gmailRoutes);
+app.use('/api/vendor-rules', vendorRulesRoutes);
 
 // Basic route
 app.get('/', (req, res) => {

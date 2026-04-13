@@ -26,10 +26,13 @@ Rules:
    - balance (numeric or null)
    - type ("Credit" or "Debit")
    - category (one of: Transfer, EMI, Salary, Refund, ATM, Cash, Card Payment, Shopping, Travel, Utility, Food, Health, Education, Investment, Fee, Interest, Tax, Subscription, Rent, Insurance, Other)
+   - box: [top, left, bottom, right] normalized in 0..1000
+   - page: 1-indexed page number
 4) Return meaningful numeric fields needed for validation:
    - openingBalance, closingBalance, totalCredits, totalDebits, totalDeposits, totalWithdrawals
 5) Also return:
    - bankName, accountNumber, accountHolder, currency, statementDate
+     (for these fields prefer object format: { val, box, page })
    - statementPeriod: { from, to }
    - reconciliationSummary: { openingBalance, closingBalance, totalDebits, totalCredits, transactionCount }
    - summary (short text)
@@ -59,7 +62,9 @@ Output JSON object schema:
       "withdrawal": number | null,
       "balance": number | null,
       "type": "Credit" | "Debit",
-      "category": string
+      "category": string,
+      "box": [number, number, number, number],
+      "page": number
     }
   ],
   "reconciliationSummary": {
@@ -132,6 +137,44 @@ function toNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function valueOfMaybeField(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, 'val')) {
+    return value.val;
+  }
+  return value;
+}
+
+function normalizeBox(boxCandidate) {
+  if (!Array.isArray(boxCandidate) || boxCandidate.length < 4) return [];
+  return boxCandidate
+    .slice(0, 4)
+    .map((n) => {
+      const v = Number(n);
+      if (!Number.isFinite(v)) return 0;
+      if (v < 0) return 0;
+      if (v > 1000) return 1000;
+      return Math.round(v);
+    });
+}
+
+function normalizePage(pageCandidate) {
+  const p = Number(pageCandidate);
+  if (!Number.isFinite(p) || p < 1) return 0;
+  return Math.floor(p);
+}
+
+function normalizeStatField(rawValue, fallback = null) {
+  if (rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue) && Object.prototype.hasOwnProperty.call(rawValue, 'val')) {
+    return {
+      val: rawValue.val ?? fallback,
+      box: normalizeBox(rawValue.box),
+      page: normalizePage(rawValue.page),
+    };
+  }
+  if (rawValue === undefined || rawValue === null || rawValue === '') return { val: fallback, box: [], page: 0 };
+  return { val: rawValue, box: [], page: 0 };
+}
+
 function pick(obj, keys) {
   for (const key of keys) {
     if (obj[key] !== undefined && obj[key] !== null && obj[key] !== '') return obj[key];
@@ -164,6 +207,8 @@ function normalizeTransactions(rows) {
       else if (deposit !== null && (withdrawal === null || deposit >= withdrawal)) type = 'Credit';
 
       const category = pick(row, ['category', 'Category']) || 'Other';
+      const box = normalizeBox(pick(row, ['box', 'bbox', 'boundingBox', 'coordinates']));
+      const page = normalizePage(pick(row, ['page', 'pageNumber', 'pg']));
 
       return {
         date: String(date),
@@ -175,9 +220,70 @@ function normalizeTransactions(rows) {
         balance,
         type,
         category: String(category),
+        box,
+        page,
       };
     })
     .filter(Boolean);
+}
+
+function buildReconciliation(normalized, statementType) {
+  const tx = Array.isArray(normalized.transactions) ? normalized.transactions : [];
+  const isBank = statementType === 'BANK';
+
+  const extractedDebits = tx.reduce((sum, t) => {
+    const val = toNumber(t.withdrawal) ?? (t.type === 'Debit' ? toNumber(t.amount) : 0) ?? 0;
+    return sum + (val || 0);
+  }, 0);
+  const extractedCredits = tx.reduce((sum, t) => {
+    const val = toNumber(t.deposit) ?? (t.type === 'Credit' ? toNumber(t.amount) : 0) ?? 0;
+    return sum + (val || 0);
+  }, 0);
+
+  const opening = toNumber(valueOfMaybeField(normalized.openingBalance))
+    ?? toNumber(normalized.reconciliationSummary?.openingBalance)
+    ?? 0;
+  const expectedClosing = toNumber(valueOfMaybeField(normalized.closingBalance))
+    ?? toNumber(normalized.reconciliationSummary?.closingBalance)
+    ?? 0;
+
+  const calculatedClosing = isBank
+    ? opening + extractedCredits - extractedDebits
+    : opening + extractedDebits - extractedCredits;
+
+  const expectedDebits = toNumber(normalized.reconciliationSummary?.totalDebits);
+  const expectedCredits = toNumber(normalized.reconciliationSummary?.totalCredits);
+
+  const debitDelta = expectedDebits === null ? 0 : Math.abs(expectedDebits - extractedDebits);
+  const creditDelta = expectedCredits === null ? 0 : Math.abs(expectedCredits - extractedCredits);
+  const balanceDelta = Math.abs(expectedClosing - calculatedClosing);
+
+  const reasons = [];
+  if (balanceDelta > 0.5) reasons.push(`Closing mismatch: expected ${expectedClosing.toFixed(2)} vs calculated ${calculatedClosing.toFixed(2)}.`);
+  if (expectedDebits !== null && debitDelta > 0.5) reasons.push(`Debit mismatch: expected ${expectedDebits.toFixed(2)} vs extracted ${extractedDebits.toFixed(2)}.`);
+  if (expectedCredits !== null && creditDelta > 0.5) reasons.push(`Credit mismatch: expected ${expectedCredits.toFixed(2)} vs extracted ${extractedCredits.toFixed(2)}.`);
+  const missingBbox = tx.filter((t) => !t.box?.length || !t.page).length;
+  if (missingBbox > 0) reasons.push(`${missingBbox} transaction(s) missing bounding boxes.`);
+
+  const matched = balanceDelta <= 1 && debitDelta <= 1 && creditDelta <= 1;
+
+  return {
+    matched,
+    balanceDelta: Number(balanceDelta.toFixed(2)),
+    debitDelta: Number(debitDelta.toFixed(2)),
+    creditDelta: Number(creditDelta.toFixed(2)),
+    calculatedClosing: Number(calculatedClosing.toFixed(2)),
+    expectedClosing: Number(expectedClosing.toFixed(2)),
+    extractedDebits: Number(extractedDebits.toFixed(2)),
+    extractedCredits: Number(extractedCredits.toFixed(2)),
+    extractedDeposits: Number(extractedCredits.toFixed(2)),
+    extractedWithdrawals: Number(extractedDebits.toFixed(2)),
+    transactionCount: tx.length,
+    continuityErrors: 0,
+    duplicateCount: 0,
+    reasons,
+    checkedAt: new Date(),
+  };
 }
 
 function normalizeExtraction(extraction) {
@@ -192,11 +298,18 @@ function normalizeExtraction(extraction) {
 
     return {
       statementType: 'BANK',
+      bankName: normalizeStatField(null, 'Unknown Bank'),
+      accountNumber: normalizeStatField(''),
+      accountHolder: normalizeStatField(''),
+      statementDate: normalizeStatField(''),
+      statementPeriod: { from: '', to: '', box: [], page: 0 },
+      openingBalance: normalizeStatField(transactions[0]?.balance ?? null),
+      closingBalance: normalizeStatField(transactions[transactions.length - 1]?.balance ?? null),
       transactions,
       totalCredits,
       totalDebits,
-      totalDeposits: totalCredits,
-      totalWithdrawals: totalDebits,
+      totalDeposits: normalizeStatField(totalCredits),
+      totalWithdrawals: normalizeStatField(totalDebits),
       reconciliationSummary: {
         openingBalance: transactions[0]?.balance ?? null,
         closingBalance: transactions[transactions.length - 1]?.balance ?? null,
@@ -213,18 +326,34 @@ function normalizeExtraction(extraction) {
   return {
     ...raw,
     statementType: raw.statementType || raw.accountType || raw.type || 'BANK',
-    openingBalance: toNumber(raw.openingBalance),
-    closingBalance: toNumber(raw.closingBalance),
-    totalCredits: toNumber(raw.totalCredits),
-    totalDebits: toNumber(raw.totalDebits),
-    totalDeposits: toNumber(raw.totalDeposits),
-    totalWithdrawals: toNumber(raw.totalWithdrawals),
+    bankName: normalizeStatField(raw.bankName, 'Unknown Bank'),
+    accountNumber: normalizeStatField(raw.accountNumber, ''),
+    accountHolder: normalizeStatField(raw.accountHolder, ''),
+    statementDate: normalizeStatField(raw.statementDate, ''),
+    statementPeriod: raw.statementPeriod || { from: '', to: '', box: [], page: 0 },
+    openingBalance: normalizeStatField(raw.openingBalance, null),
+    closingBalance: normalizeStatField(raw.closingBalance, null),
+    totalCredits: normalizeStatField(raw.totalCredits, null),
+    totalDebits: normalizeStatField(raw.totalDebits, null),
+    totalDeposits: normalizeStatField(raw.totalDeposits, null),
+    totalWithdrawals: normalizeStatField(raw.totalWithdrawals, null),
+    previousBalance: normalizeStatField(raw.previousBalance, null),
+    outstandingTotal: normalizeStatField(raw.outstandingTotal, null),
+    minPaymentDue: normalizeStatField(raw.minPaymentDue, null),
+    creditLimit: normalizeStatField(raw.creditLimit, null),
+    availableLimit: normalizeStatField(raw.availableLimit, null),
+    paymentDueDate: normalizeStatField(raw.paymentDueDate, ''),
+    totalInterestCharged: normalizeStatField(raw.totalInterestCharged, null),
+    totalLateFee: normalizeStatField(raw.totalLateFee, null),
+    totalForexFee: normalizeStatField(raw.totalForexFee, null),
+    totalFees: normalizeStatField(raw.totalFees, null),
+    currency: String(valueOfMaybeField(raw.currency) || 'INR'),
     transactions,
     reconciliationSummary: raw.reconciliationSummary || {
-      openingBalance: toNumber(raw.openingBalance),
-      closingBalance: toNumber(raw.closingBalance),
-      totalDebits: toNumber(raw.totalDebits),
-      totalCredits: toNumber(raw.totalCredits),
+      openingBalance: toNumber(valueOfMaybeField(raw.openingBalance)),
+      closingBalance: toNumber(valueOfMaybeField(raw.closingBalance)),
+      totalDebits: toNumber(valueOfMaybeField(raw.totalDebits)),
+      totalCredits: toNumber(valueOfMaybeField(raw.totalCredits)),
       transactionCount: transactions.length,
     },
   };
@@ -316,11 +445,12 @@ async function extractTransactionsWithVertex(pdfStorageUrl) {
 function applyExtraction(statement, extraction) {
   const normalized = normalizeExtraction(extraction);
   statement.status = 'COMPLETED';
+  statement.processingError = undefined;
   statement.ocrEngine = 'gemini_vision_native';
   statement.type = String(normalized.statementType || statement.type || 'BANK').toUpperCase() === 'CREDIT_CARD' ? 'CREDIT_CARD' : 'BANK';
   statement.rawAIResponse = normalized;
   statement.bankName = toStringValObject(normalized.bankName, statement.bankName?.val || 'Unknown Bank');
-  statement.currency = normalized.currency || 'INR';
+  statement.currency = String(valueOfMaybeField(normalized.currency) || 'INR');
   statement.creditLimit = toValObject(normalized.creditLimit, null);
   statement.availableLimit = toValObject(normalized.availableLimit, null);
   statement.outstandingTotal = toValObject(normalized.outstandingTotal, null);
@@ -355,7 +485,27 @@ function applyExtraction(statement, extraction) {
   statement.emiList = Array.isArray(normalized.emiList) ? normalized.emiList : [];
   statement.reconciliationSummary = normalized.reconciliationSummary || undefined;
   statement.summary = normalized.summary || '';
-  statement.extractionQuality = 'unverified';
+
+  const rec = buildReconciliation(normalized, statement.type);
+  statement.reconciliation = rec;
+  if (rec.matched) statement.extractionQuality = 'verified';
+  else if (rec.balanceDelta <= 10) statement.extractionQuality = 'minor_mismatch';
+  else statement.extractionQuality = 'extraction_error';
+
+  statement.rawAIResponse = {
+    ...(statement.rawAIResponse || {}),
+    calculationChecker: {
+      status: statement.extractionQuality,
+      why: rec.reasons?.length ? rec.reasons : ['All balance and aggregate checks passed.'],
+      metrics: {
+        expectedClosing: rec.expectedClosing,
+        calculatedClosing: rec.calculatedClosing,
+        balanceDelta: rec.balanceDelta,
+        extractedDebits: rec.extractedDebits,
+        extractedCredits: rec.extractedCredits,
+      },
+    },
+  };
 }
 
 async function processStatementPdf({
@@ -411,6 +561,14 @@ async function processStatementPdf({
   console.log(`[Pipeline] Statement record created with id=${statement._id}`);
 
   applyExtraction(statement, extraction);
+  const txCount = statement.transactions?.length || 0;
+  const txWithBbox = (statement.transactions || []).filter((t) => t.box?.length && t.page).length;
+  console.log(`[Pipeline] Transactions extracted: ${txCount}, with bbox: ${txWithBbox}`);
+  if (statement.reconciliation) {
+    console.log(
+      `[Pipeline] Checker status=${statement.extractionQuality}, matched=${statement.reconciliation.matched}, balanceDelta=${statement.reconciliation.balanceDelta}`
+    );
+  }
   await statement.save();
   console.log(`[Pipeline] Statement saved successfully with status=${statement.status}`);
   return statement;
@@ -423,7 +581,44 @@ async function refreshSignedUrl(pdfFileName, fallbackUrl = '') {
   return data.signedUrl;
 }
 
+/**
+ * Re-run Vertex extraction on the already-stored unlocked PDF (same statement id).
+ */
+async function reIngestStatementById(userId, statementId) {
+  const statement = await Statement.findById(statementId);
+  if (!statement || statement.user.toString() !== userId.toString()) {
+    throw new Error('Statement not found');
+  }
+  if (!statement.pdfFileName) {
+    throw new Error('No PDF on file for this statement');
+  }
+
+  statement.status = 'PROCESSING';
+  statement.processingError = undefined;
+  statement.isApproved = false;
+  statement.isUserRejected = false;
+  await statement.save();
+
+  try {
+    const freshUrl = await refreshSignedUrl(statement.pdfFileName, statement.pdfStorageUrl || '');
+    if (!freshUrl) throw new Error('Could not create signed URL for stored PDF');
+    console.log(`[Pipeline] Re-ingest for statement=${statementId}`);
+    const extraction = await extractTransactionsWithVertex(freshUrl);
+    applyExtraction(statement, extraction);
+    await statement.save();
+    return statement;
+  } catch (err) {
+    console.error('[Pipeline] Re-ingest failed:', err);
+    statement.status = 'FAILED';
+    statement.processingError = err.message || String(err);
+    await statement.save();
+    throw err;
+  }
+}
+
 module.exports = {
   processStatementPdf,
   refreshSignedUrl,
+  reIngestStatementById,
+  applyExtraction,
 };

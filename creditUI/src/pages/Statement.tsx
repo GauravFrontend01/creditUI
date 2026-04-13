@@ -112,6 +112,7 @@ interface StatementData {
   status?: "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED"
   processingError?: string
   isApproved?: boolean
+  isUserRejected?: boolean
   ocrEngine?: 'gemini' | 'ocr_space' | 'ocr_space_v1' | 'ocr_space_v2' | 'ocr_space_v3'
   extractionQuality?: 'verified' | 'minor_mismatch' | 'extraction_error' | 'unverified'
   versions?: VersionHistory[]
@@ -458,8 +459,6 @@ function Statement() {
 
   // ── Fetch data ────────────────────────────────────────────────────────────
   useEffect(() => {
-    let pollInterval: any = null;
-
     const load = async () => {
       if (id === 'preview') {
         console.log("[Statement] Entered PREVIEW mode via /statements/preview");
@@ -514,13 +513,6 @@ function Statement() {
           }
 
           if (data.pdfStorageUrl && pages.length === 0) loadPdfFromUrl(data.pdfStorageUrl, data.pdfPassword)
-
-          // If still processing, setup polling
-          if ((data.status === 'PENDING' || data.status === 'PROCESSING') && !pollInterval) {
-            pollInterval = setInterval(load, 3000);
-          } else if (data.status === 'COMPLETED' || data.status === 'FAILED') {
-            if (pollInterval) clearInterval(pollInterval);
-          }
         } catch (e: any) {
           if (e.response?.status === 401) navigate('/login')
           else navigate('/statements')
@@ -548,11 +540,26 @@ function Statement() {
       }
     }
     load()
-
-    return () => {
-      if (pollInterval) clearInterval(pollInterval);
-    }
   }, [id])
+
+  useEffect(() => {
+    if (!id || id === 'preview') return
+    if (!data || data._id !== id) return
+    if (data.status !== 'PENDING' && data.status !== 'PROCESSING') return
+
+    const tick = async () => {
+      try {
+        const { data: d } = await api.get(`/api/statements/${id}`)
+        setData(d)
+        if (d.type) setForensicType(d.type)
+      } catch (e) {
+        console.error('Statement poll failed', e)
+      }
+    }
+
+    const t = setInterval(tick, 3000)
+    return () => clearInterval(t)
+  }, [id, data?._id, data?.status])
 
   useEffect(() => {
     api.get('/api/vendor-rules').then((res) => setVendorRules(res.data)).catch(() => { })
@@ -636,11 +643,24 @@ function Statement() {
     if (!id) return
     try {
       await api.put(`/api/statements/${id}/approve`)
-      setData(prev => prev ? { ...prev, isApproved: true } : null)
+      setData(prev => prev ? { ...prev, isApproved: true, isUserRejected: false } : null)
       setToast({ message: 'Forensic Audit Approved', visible: true, type: 'success' })
       setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000)
     } catch (e: any) {
       setToast({ message: 'Approval failed: ' + (e.message || "Unknown error"), visible: true, type: 'error' })
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000)
+    }
+  }
+
+  const confirmReject = async () => {
+    if (!id) return
+    try {
+      await api.put(`/api/statements/${id}/reject`)
+      setData(prev => prev ? { ...prev, isApproved: false, isUserRejected: true } : null)
+      setToast({ message: 'Marked as not accepted', visible: true, type: 'success' })
+      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000)
+    } catch (e: any) {
+      setToast({ message: 'Update failed: ' + (e.message || 'Unknown error'), visible: true, type: 'error' })
       setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000)
     }
   }
@@ -735,11 +755,13 @@ function Statement() {
     if (!id) return;
     try {
       setReprocessing(true);
-      await api.post(`/api/statements/${id}/re-ingest`);
+      const { data: d } = await api.post(`/api/statements/${id}/re-ingest`);
+      setData(d);
+      if (d.type) setForensicType(d.type);
       setToast({ message: "Re-ingestion cycle initiated", visible: true, type: "success" });
       setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
     } catch (error: any) {
-      setToast({ message: "Re-ingestion failed", visible: true, type: "error" });
+      setToast({ message: error.response?.data?.message || "Re-ingestion failed", visible: true, type: "error" });
       setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
     } finally {
       setReprocessing(false);
@@ -1016,17 +1038,20 @@ function Statement() {
 
   if (data.status === 'PENDING' || data.status === 'PROCESSING') {
     return (
-      <div className="flex flex-col items-center justify-center w-full h-screen bg-slate-50 gap-6">
+      <div className="flex flex-col items-center justify-center w-full h-screen bg-slate-50 gap-6 px-6">
         <div className="relative">
           <div className="absolute inset-0 bg-primary/20 rounded-full blur-2xl animate-pulse" />
           <IconLoader2 className="h-16 w-16 animate-spin text-primary relative z-10" />
         </div>
-        <div className="text-center space-y-2 relative z-10">
-          <h2 className="text-2xl font-black tracking-tight text-slate-800 uppercase">Neural Audit in Progress</h2>
-          <p className="text-sm text-slate-400 font-bold uppercase tracking-[0.2em]">Mapping spatial vectors & categorizing portfolio risks...</p>
+        <div className="text-center space-y-2 relative z-10 max-w-md">
+          <p className="text-[10px] font-black text-primary uppercase tracking-[0.25em]">Extraction stage</p>
+          <h2 className="text-2xl font-black tracking-tight text-slate-800">Reading your statement</h2>
+          <p className="text-sm text-slate-500 font-medium leading-relaxed">
+            AI is pulling amounts and transactions from the PDF and reconciling totals. The full statement view unlocks when this finishes.
+          </p>
         </div>
         <Button variant="outline" className="rounded-xl px-8 h-12 gap-2 mt-4" onClick={() => navigate('/statements')}>
-          <IconArrowLeft size={16} /> Return to Queue
+          <IconArrowLeft size={16} /> Back to statements
         </Button>
       </div>
     )
@@ -1297,14 +1322,20 @@ function Statement() {
             </div>
             <div className="flex items-center gap-4">
               {isSavedView && !data.isApproved && data.status === 'COMPLETED' && (
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
                   <Button
                     onClick={confirmApproval}
                     className="rounded-xl px-6 h-11 gap-2 bg-emerald-600 hover:bg-emerald-700 shadow-[0_8px_16px_-6px_rgba(16,185,129,0.3)] font-bold text-xs uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98]"
                   >
-                    <IconCheck size={16} strokeWidth={3} /> Verify & Download
+                    <IconCheck size={16} strokeWidth={3} /> Approve
                   </Button>
-                  
+                  <Button
+                    onClick={confirmReject}
+                    variant="outline"
+                    className="rounded-xl px-6 h-11 gap-2 border-red-200 text-red-600 hover:bg-red-50 font-bold text-xs uppercase tracking-widest transition-all"
+                  >
+                    <IconX size={16} /> Reject
+                  </Button>
                   <Button
                     onClick={handleDownloadUnlocked}
                     variant="outline"
@@ -1312,7 +1343,28 @@ function Statement() {
                   >
                     <IconDownload size={16} /> Unlocked PDF
                   </Button>
+                  {data.reconciliation && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setShowMathDetails(true)}
+                      className="rounded-xl px-6 h-11 gap-2 border-slate-200 font-bold text-xs uppercase tracking-widest transition-all"
+                    >
+                      <IconEqual size={16} /> Numbers check
+                    </Button>
+                  )}
                 </div>
+              )}
+
+              {isSavedView && data.isApproved && data.status === 'COMPLETED' && data.reconciliation && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowMathDetails(true)}
+                  className="rounded-xl px-6 h-11 gap-2 border-slate-200 font-bold text-xs uppercase tracking-widest"
+                >
+                  <IconEqual size={16} /> Numbers check
+                </Button>
               )}
 
               {isSavedView && (
@@ -1434,6 +1486,20 @@ function Statement() {
             />
           </div>
         </div>
+
+        {data.status === 'COMPLETED' && data.isUserRejected && !data.isApproved && (
+          <div className="mx-6 mt-4 p-4 bg-amber-50/80 border border-amber-100 rounded-2xl flex items-start gap-4">
+            <div className="h-10 w-10 rounded-2xl bg-amber-100 flex items-center justify-center shrink-0 border border-amber-200">
+              <IconAlertTriangle size={20} className="text-amber-700" />
+            </div>
+            <div className="flex-1 space-y-1 py-0.5">
+              <h4 className="text-xs font-black text-amber-900 uppercase tracking-tighter">Not accepted</h4>
+              <p className="text-[11px] font-bold text-amber-800/80 leading-relaxed max-w-2xl">
+                You rejected this extraction. Use <span className="font-black">Re-Ingest</span> to run the AI again on the stored unlocked PDF, or <span className="font-black">Approve</span> if the numbers look correct after review.
+              </p>
+            </div>
+          </div>
+        )}
 
         {data.status === 'FAILED' && (
           <div className="mx-6 mt-4 p-4 bg-red-50/50 border border-red-100 rounded-2xl flex items-start gap-4 animate-in slide-in-from-top-4 duration-500">
@@ -2127,6 +2193,20 @@ function Statement() {
                       <li key={i} className="flex items-start gap-2 text-xs font-semibold text-slate-600 leading-tight">
                         <span className="h-1 w-2 rounded-full bg-red-400 mt-1.5 shrink-0" />
                         {reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {Array.isArray(data.rawAIResponse?.calculationChecker?.why) && data.rawAIResponse.calculationChecker.why.length > 0 && (
+                <div className="bg-slate-50 border border-slate-100 rounded-2xl p-5 space-y-3 mt-4">
+                  <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Why this matches (or not)</p>
+                  <ul className="space-y-2">
+                    {data.rawAIResponse.calculationChecker.why.map((line: string, i: number) => (
+                      <li key={i} className="flex items-start gap-2 text-xs font-semibold text-slate-600 leading-tight">
+                        <span className="h-1 w-2 rounded-full bg-primary/60 mt-1.5 shrink-0" />
+                        {line}
                       </li>
                     ))}
                   </ul>
