@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { GoogleGenAI } = require('@google/genai');
 const User = require('../models/User');
 const Statement = require('../models/Statement');
 const {
@@ -151,6 +152,98 @@ function isDuplicateByMetadata(existing, accountHint, fromIso, toIso) {
     if (f === fromIso && t === toIso) return true;
   }
   return false;
+}
+
+function normalizeGeminiJson(text) {
+  return String(text || '')
+    .replace(/```json/gi, '')
+    .replace(/```/g, '')
+    .trim();
+}
+
+function readGeminiText(response) {
+  if (!response) return '';
+  if (typeof response.text === 'function') return response.text();
+  if (typeof response.text === 'string') return response.text;
+  return response?.candidates?.[0]?.content?.parts?.find((p) => typeof p?.text === 'string')?.text || '';
+}
+
+function buildClassificationPrompt(candidates) {
+  const compact = candidates.map((c) => ({
+    id: c.id,
+    subject: c.subject,
+    from: c.from,
+    filename: c.filename,
+    bank: c.bank,
+    encrypted: !!c.encrypted,
+    savedPassword: !!(c.savedPassword && String(c.savedPassword).trim()),
+    alreadyProcessed: !!c.alreadyProcessed,
+  }));
+
+  return `
+You are a financial document classifier for an Indian personal finance app.
+
+Your job is to look at email attachments and decide which ones are bank account statements or credit card statements that contain transaction history and should be processed.
+
+INCLUDE:
+- Bank savings account statements
+- Bank current account statements
+- Credit card statements
+- Prepaid card statements
+
+EXCLUDE:
+- Equity/securities statements (Zerodha, Groww, NSDL CDSL etc)
+- Demat account statements
+- Mutual fund statements
+- Trading account statements
+- Contract notes
+- Insurance documents
+- Wallet transaction reports (Paytm wallet etc)
+- Anything not a bank/credit card statement
+
+Candidates:
+${JSON.stringify(compact, null, 2)}
+
+Rules:
+- If duplicate statement appears multiple times, include only one. Prefer encrypted=true with savedPassword=true.
+- If unsure, skip.
+- If alreadyProcessed=true, skip it.
+- Respond ONLY valid JSON.
+
+Format:
+{
+  "process": [{ "id": "candidate-id", "reason": "..." }],
+  "skip": [{ "id": "candidate-id", "reason": "..." }]
+}
+`.trim();
+}
+
+async function classifyCandidatesWithGemini(candidates) {
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    return { processIds: new Set(), reasons: new Map() };
+  }
+
+  const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_PROJECT_ID || '';
+  const location = process.env.GOOGLE_CLOUD_LOCATION || process.env.GOOGLE_LOCATION || 'us-central1';
+  if (!project) throw new Error('Missing GOOGLE_PROJECT_ID for Gmail classification');
+
+  const client = new GoogleGenAI({ vertexai: true, project, location });
+  const prompt = buildClassificationPrompt(candidates);
+  const response = await client.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: [prompt],
+    generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+  });
+  const raw = normalizeGeminiJson(readGeminiText(response));
+  const parsed = JSON.parse(raw || '{}');
+  const processIds = new Set((parsed.process || []).map((x) => String(x.id || '')));
+  const reasons = new Map();
+  for (const row of parsed.process || []) reasons.set(String(row.id || ''), String(row.reason || 'Relevant statement'));
+  for (const row of parsed.skip || []) {
+    const id = String(row.id || '');
+    if (!reasons.has(id)) reasons.set(id, String(row.reason || 'Skipped by classifier'));
+  }
+  return { processIds, reasons };
 }
 
 const FRONTEND = () => (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
@@ -378,7 +471,30 @@ exports.listGmailCandidates = async (req, res) => {
       }
     }
 
-    res.json({ candidates });
+    let processIds = new Set(
+      candidates
+        .filter((c) => !c.alreadyProcessed && (!c.isImported || !c.existsInDb))
+        .map((c) => c.id)
+    );
+    const reasons = new Map();
+    try {
+      const classified = await classifyCandidatesWithGemini(candidates);
+      if (classified.processIds.size > 0) processIds = classified.processIds;
+      for (const [k, v] of classified.reasons.entries()) reasons.set(k, v);
+    } catch (e) {
+      console.warn('gmail candidate classification fallback:', e?.message || e);
+    }
+
+    const enriched = candidates.map((c) => {
+      const shouldProcess = processIds.has(c.id) && !c.alreadyProcessed;
+      return {
+        ...c,
+        shouldProcess,
+        classificationReason: reasons.get(c.id) || (shouldProcess ? 'Relevant statement' : 'Skipped by classifier'),
+      };
+    });
+
+    res.json({ candidates: enriched });
   } catch (error) {
     console.error('listGmailCandidates', error);
     res.status(500).json({ message: 'Failed to fetch messages' });

@@ -227,7 +227,7 @@ const Upload = () => {
       setCandidates(fetched);
 
       const fresh = fetched
-        .filter((c: any) => !c.alreadyProcessed && (!c.isImported || !c.existsInDb))
+        .filter((c: any) => c.shouldProcess && !c.alreadyProcessed && (!c.isImported || !c.existsInDb))
         .map((c: any) => c.id);
       setSelectedIds(fresh);
       
@@ -502,12 +502,13 @@ const Upload = () => {
             {candidates.map((c) => {
               const isSelected = selectedIds.includes(c.id);
               const lockedAsDone = Boolean(c.alreadyProcessed);
+              const classifierSkipped = c.shouldProcess === false;
               return (
                 <div
                   key={c.id}
                   className={cn(
                     'rounded-xl border border-primary/10 bg-background p-4 space-y-3 transition-opacity',
-                    (!isSelected || lockedAsDone) && 'opacity-60'
+                    (!isSelected || lockedAsDone || classifierSkipped) && 'opacity-60'
                   )}
                 >
                   <label className="flex items-start gap-3 cursor-pointer">
@@ -515,7 +516,7 @@ const Upload = () => {
                       type="checkbox"
                       className="mt-1 rounded border-primary/30"
                       checked={isSelected}
-                      disabled={lockedAsDone}
+                      disabled={lockedAsDone || classifierSkipped}
                       onChange={() =>
                         setSelectedIds((prev) => (isSelected ? prev.filter((id) => id !== c.id) : [...prev, c.id]))
                       }
@@ -532,10 +533,18 @@ const Upload = () => {
                             already_processed
                           </span>
                         )}
+                        {classifierSkipped && !lockedAsDone && (
+                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 font-semibold">
+                            skipped
+                          </span>
+                        )}
                       </div>
+                      {c.classificationReason && (
+                        <p className="text-[10px] text-muted-foreground">{c.classificationReason}</p>
+                      )}
                     </div>
                   </label>
-                  {isSelected && !lockedAsDone && (
+                  {isSelected && !lockedAsDone && !classifierSkipped && (
                     <div className="pl-7">
                       <div className="relative">
                         <input
