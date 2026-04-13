@@ -137,7 +137,7 @@ const statementSchema = new mongoose.Schema({
   isApproved: { type: Boolean, default: false },
   ocrEngine: {
     type: String,
-    enum: ['gemini', 'ocr_space', 'ocr_space_v1', 'ocr_space_v2', 'ocr_space_v3', 'ocr_mistral', 'groq_llama', 'mistral_llama_hybrid'],
+    enum: ['gemini', 'ocr_space', 'ocr_space_v1', 'ocr_space_v2', 'ocr_space_v3', 'ocr_mistral', 'groq_llama', 'mistral_llama_hybrid', 'gemini_vision_native'],
     default: 'gemini'
   },
   gmailMessageId: { type: String, index: true },

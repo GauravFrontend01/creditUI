@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const { createStatement, getMyStatements, getStatementById, deleteStatement, approveStatement, deleteManyStatements, reprocessStatement, reIngestStatement, downloadUnlockedPdf, rebuildPdfFromImages } = require('../controllers/statementController');
+const { createStatement, getMyStatements, getStatementById } = require('../controllers/statementController');
 const { protect } = require('../middleware/authMiddleware');
 
 // Store PDF in memory buffer (we stream it directly to Supabase)
@@ -17,16 +17,9 @@ const upload = multer({
   },
 });
 
-// POST: multipart/form-data  fields: pdf (file), data (JSON string), pdfPassword (string)
+// POST: multipart/form-data fields: pdf (file), pdfPassword (string), statementType
 router.post('/', protect, upload.single('pdf'), createStatement);
-router.put('/:id/approve', protect, approveStatement);
 router.get('/', protect, getMyStatements);
 router.get('/:id', protect, getStatementById);
-router.delete('/:id', protect, deleteStatement);
-router.post('/bulk-delete', protect, deleteManyStatements);
-router.post('/:id/reprocess', protect, reprocessStatement);
-router.post('/:id/re-ingest', protect, reIngestStatement);
-router.get('/:id/download-unlocked', protect, downloadUnlockedPdf);
-router.post('/rebuild-pdf', protect, rebuildPdfFromImages);
 
 module.exports = router;

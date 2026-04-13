@@ -446,7 +446,7 @@ function Statement() {
   const [injectedJson, setInjectedJson] = useState('');
   const [vendorRules, setVendorRules] = useState<VendorRuleRow[]>([])
   const [isPreview, setIsPreview] = useState(false)
-  const [previewData, setPreviewData] = useState<any>(null)
+  const [, setPreviewData] = useState<any>(null)
   const [sendingToAI, setSendingToAI] = useState(false)
 
   const { id } = useParams()

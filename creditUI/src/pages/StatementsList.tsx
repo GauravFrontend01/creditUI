@@ -5,7 +5,6 @@ import {
   IconSearch,
   IconPlus,
   IconLoader2,
-  IconTrash,
   IconCreditCard,
   IconReceipt2,
   IconTrendingUp,
@@ -79,56 +78,6 @@ const formatDate = (dateStr?: string) => {
   return dateStr.toUpperCase();
 };
 
-// ── Delete Button ──────────────────────────────────────────────────────────
-function DeleteButton({ statementId, bankName }: { statementId: string; bankName: string }) {
-  return (
-    <Button
-      size="sm"
-      variant="ghost"
-      onClick={(e) => {
-        e.stopPropagation();
-        window.dispatchEvent(new CustomEvent('request-delete', { detail: { id: statementId, name: bankName } }));
-      }}
-      className="h-8 gap-1.5 text-xs font-bold text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg px-3 transition-colors"
-    >
-      <IconTrash size={14} />
-      Delete
-    </Button>
-  )
-}
-
-function ReIngestButton({ statementId }: { statementId: string }) {
-  const [loading, setLoading] = React.useState(false);
-  
-  const handleReIngest = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setLoading(true);
-    try {
-      await api.post(`/api/statements/${statementId}/re-ingest`);
-    } catch (err) {
-      console.error("Re-ingestion failed", err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Button
-      size="sm"
-      variant="ghost"
-      onClick={handleReIngest}
-      disabled={loading}
-      className={cn(
-        "h-8 gap-1.5 text-xs font-bold text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg px-3 transition-all",
-        loading && "animate-pulse"
-      )}
-    >
-      {loading ? <IconLoader2 size={14} className="animate-spin" /> : <IconReceipt2 size={14} />}
-      Re-ingest
-    </Button>
-  );
-}
-
 // ── Statement Group ────────────────────────────────────────────────────────
 interface GroupProps {
   name: string
@@ -200,7 +149,7 @@ function StatementGroup({ name, accNum, items, navigate, fmt }: GroupProps) {
               <div className="col-span-2 text-right pr-4">Balance / Outstanding</div>
               <div className="col-span-2 text-right pr-4">Activity / Min Due</div>
               <div className="col-span-2 text-center">Status</div>
-              <div className="col-span-2 text-right pr-4">Action</div>
+              <div className="col-span-2 text-right pr-4">Open</div>
             </div>
 
             {items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).map(st => {
@@ -263,9 +212,8 @@ function StatementGroup({ name, accNum, items, navigate, fmt }: GroupProps) {
                     )}
                   </div>
 
-                  <div className="col-span-2 flex justify-end pr-2 gap-1" onClick={e => e.stopPropagation()}>
-                    {st.status !== 'PROCESSING' && <ReIngestButton statementId={st._id} />}
-                    <DeleteButton statementId={st._id} bankName={st.bankName.val} />
+                  <div className="col-span-2 flex justify-end pr-2">
+                    <span className="text-[10px] font-bold text-primary uppercase tracking-wider">View</span>
                   </div>
                 </div>
               )
@@ -315,14 +263,13 @@ export default function StatementsList() {
   const [statements, setStatements] = React.useState<Statement[]>([])
   const [loading, setLoading] = React.useState(true)
   const [globalFilter, setGlobalFilter] = React.useState("")
-  const [deleteDialog, setDeleteDialog] = React.useState<{id: string, name: string} | null>(null)
   const [vendorRules, setVendorRules] = React.useState<VendorRuleRow[]>([])
   const [spendHoverCat, setSpendHoverCat] = React.useState<string | null>(null)
   const spendHoverLeaveTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const navigate = useNavigate()
 
   React.useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const fetch_ = async () => {
       try {
@@ -357,24 +304,6 @@ export default function StatementsList() {
   React.useEffect(() => {
     return () => {
       if (spendHoverLeaveTimer.current) clearTimeout(spendHoverLeaveTimer.current)
-    }
-  }, [])
-
-  React.useEffect(() => {
-    const handler = (e: Event) => {
-      const id = (e as CustomEvent).detail
-      setStatements((prev) => prev.filter((s) => s._id !== id))
-    }
-    window.addEventListener('statement-deleted', handler)
-    
-    const deleteHandler = (e: Event) => {
-      setDeleteDialog((e as CustomEvent).detail)
-    }
-    window.addEventListener('request-delete', deleteHandler)
-    
-    return () => {
-      window.removeEventListener('statement-deleted', handler)
-      window.removeEventListener('request-delete', deleteHandler)
     }
   }, [])
 
@@ -527,16 +456,6 @@ export default function StatementsList() {
                   className="h-12 w-80 pl-11 pr-4 bg-white border border-slate-200 rounded-2xl shadow-sm text-sm font-bold placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/30 transition-all"
                 />
               </div>
-              {statements.length > 0 && (
-                <Button
-                  variant="outline"
-                  onClick={() => setDeleteDialog({ id: 'all', name: 'ALL STATEMENTS' })}
-                  className="rounded-2xl px-4 h-12 border-slate-200 text-slate-400 hover:text-red-500 hover:bg-red-50 hover:border-red-100 transition-all shadow-sm"
-                  title="Bulk Delete All"
-                >
-                  <IconTrash size={18} />
-                </Button>
-              )}
               <Button
                 onClick={() => navigate("/")}
                 className="rounded-2xl px-6 h-12 gap-2 shadow-lg shadow-primary/20 font-black text-sm uppercase tracking-wider"
@@ -744,49 +663,6 @@ export default function StatementsList() {
             </div>
           )}
         </div>
-
-        {deleteDialog && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 animate-in fade-in duration-300">
-            <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setDeleteDialog(null)} />
-            <div className="relative w-full max-w-md bg-white rounded-[2rem] p-8 shadow-2xl border border-slate-100 flex flex-col items-center text-center space-y-6 animate-in zoom-in-95 duration-200">
-              <div className="w-16 h-16 rounded-2xl bg-red-50 text-red-500 flex items-center justify-center">
-                <IconTrash size={32} />
-              </div>
-              <div className="space-y-2">
-                <h3 className="text-xl font-bold text-slate-900">Delete Audit?</h3>
-                <p className="text-sm text-slate-500 leading-relaxed px-4">
-                  Confirm deletion of <span className="font-bold text-slate-700">"{deleteDialog.name}"</span> audit record? 
-                  This forensic evidence will be unrecoverable.
-                </p>
-              </div>
-                  <div className="flex gap-3 w-full">
-                    <Button variant="outline" className="flex-1 h-12 rounded-xl font-bold text-slate-500 border-slate-200" onClick={() => setDeleteDialog(null)}>Cancel</Button>
-                    <Button 
-                      className="flex-1 h-12 rounded-xl font-bold bg-red-500 hover:bg-red-600 border-0" 
-                      onClick={async () => {
-                        const id = deleteDialog.id;
-                        setDeleteDialog(null);
-                        try {
-                          if (id === 'all') {
-                            const ids = statements.map(s => s._id);
-                            await api.post("/api/statements/bulk-delete", { ids });
-                            setStatements([]);
-                          } else {
-                            await api.delete(`/api/statements/${id}`);
-                            window.dispatchEvent(new CustomEvent('statement-deleted', { detail: id }));
-                          }
-                        } catch (err) {
-                          console.error("Delete failed", err);
-                        }
-                      }}
-                    >
-                      Delete Now
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
-    
 
       </div>
     </div>

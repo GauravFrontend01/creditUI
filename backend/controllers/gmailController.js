@@ -10,8 +10,7 @@ const {
   isPdfEncrypted,
   google,
 } = require('../services/gmailService');
-const { createStatementFromPdfBuffer } = require('./statementController');
-const { decryptPdf } = require('../services/pdfService');
+const { processStatementPdf } = require('../services/statementPipelineService');
 
 function identifyBank(subject, from) {
   const s = (subject + ' ' + from).toLowerCase();
@@ -169,148 +168,6 @@ exports.disconnectGmail = async (req, res) => {
   }
 };
 
-// @route   POST /api/gmail/sync
-// @access  Private
-exports.syncGmail = async (req, res) => {
-  try {
-    const user = await User.findById(req.user._id).select('+gmailRefreshToken');
-    if (!user?.gmailRefreshToken) {
-      return res.status(400).json({ message: 'Connect Gmail first' });
-    }
-
-    const pdfPassword = typeof req.body?.pdfPassword === 'string' ? req.body.pdfPassword : '';
-    const statementType = req.body?.statementType === 'BANK' ? 'BANK' : 'CREDIT_CARD';
-    const ocrEngine = req.body?.ocrEngine || 'gemini';
-    const maxResults = Math.min(Math.max(parseInt(req.body?.maxResults, 10) || 8, 1), 25);
-
-    const oauth2Client = createOAuth2Client();
-    oauth2Client.setCredentials({
-      refresh_token: user.gmailRefreshToken,
-      access_token: user.gmailAccessToken || undefined,
-      expiry_date: user.gmailTokenExpiry ? user.gmailTokenExpiry.getTime() : undefined,
-    });
-
-    oauth2Client.on('tokens', async (tok) => {
-      try {
-        const update = {};
-        if (tok.access_token) update.gmailAccessToken = tok.access_token;
-        if (tok.expiry_date) update.gmailTokenExpiry = new Date(tok.expiry_date);
-        if (tok.refresh_token) update.gmailRefreshToken = tok.refresh_token;
-        if (Object.keys(update).length) await User.findByIdAndUpdate(user._id, update);
-      } catch (e) {
-        console.error('persist gmail tokens', e);
-      }
-    });
-
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-    const q = defaultGmailQuery();
-    const listRes = await gmail.users.messages.list({
-      userId: 'me',
-      q,
-      maxResults,
-    });
-
-    const messageRefs = listRes.data.messages || [];
-    const imported = new Set(user.gmailImportedMessageIds || []);
-
-    const created = [];
-    const skipped = [];
-    const errors = [];
-
-    for (const ref of messageRefs) {
-      const messageId = ref.id;
-      if (!messageId) continue;
-
-      const isRecorded = imported.has(messageId);
-      if (isRecorded) {
-        // Double check: if it's in the list but missing from the Statement collection, they likely deleted it.
-        const exists = await Statement.exists({ user: user._id, gmailMessageId: messageId });
-        if (exists) {
-          skipped.push({ messageId, reason: 'already_imported' });
-          continue;
-        }
-        console.log(`[GmailSync] ${messageId} exists in sync log but not in DB. Re-syncing.`);
-      }
-
-      try {
-        const pdfs = await extractPdfAttachments(gmail, messageId);
-        if (pdfs.length === 0) {
-          skipped.push({ messageId, reason: 'no_pdf_attachment' });
-          continue;
-        }
-
-        for (let i = 0; i < pdfs.length; i += 1) {
-          const { buffer, filename, subject, from } = pdfs[i];
-          const bankLabel = identifyBank(subject, from);
-          
-          let effectivePassword = pdfPassword;
-          
-          // If no password provided, try to find a saved one for this bank
-          if (!effectivePassword && user.bankPasswords?.length) {
-            const saved = user.bankPasswords.find(p => p.label === bankLabel);
-            if (saved) {
-              console.log(`[GmailSync] Using saved password for ${bankLabel}`);
-              effectivePassword = saved.password;
-            }
-          }
-
-          // If a password was provided (either from request or saved), ensure it's saved/updated for future
-          if (pdfPassword && bankLabel !== 'Other') {
-            const existingIdx = user.bankPasswords.findIndex(p => p.label === bankLabel);
-            if (existingIdx >= 0) {
-              user.bankPasswords[existingIdx].password = pdfPassword;
-              user.bankPasswords[existingIdx].updatedAt = new Date();
-            } else {
-              user.bankPasswords.push({ label: bankLabel, password: pdfPassword });
-            }
-          }
-
-          const statement = await createStatementFromPdfBuffer({
-            userId: user._id,
-            pdfBuffer: buffer,
-            originalFileName: pdfs.length > 1 ? `${filename.replace(/\.pdf$/i, '')}_${i + 1}.pdf` : filename,
-            pdfPassword: effectivePassword,
-            statementType,
-            ocrEngine,
-            gmailMessageId: messageId,
-          });
-          created.push({ statementId: statement._id, messageId, filename, bank: bankLabel });
-        }
-
-        imported.add(messageId);
-      } catch (err) {
-        console.error('syncGmail message', messageId, err);
-        errors.push({ messageId, error: err.message || String(err) });
-      }
-    }
-
-    user.gmailImportedMessageIds = [...imported].slice(-800);
-    user.gmailLastSyncAt = new Date();
-    user.gmailLastSyncError = errors.length ? errors.map((e) => e.error).join('; ').slice(0, 500) : '';
-    user.gmailAccessToken = oauth2Client.credentials.access_token || user.gmailAccessToken;
-    if (oauth2Client.credentials.expiry_date) {
-      user.gmailTokenExpiry = new Date(oauth2Client.credentials.expiry_date);
-    }
-
-    await user.save(); 
-
-    res.json({
-      query: q,
-      scanned: messageRefs.length,
-      created,
-      skipped,
-      errors,
-    });
-  } catch (error) {
-    console.error('syncGmail', error);
-    await User.findByIdAndUpdate(req.user._id, {
-      gmailLastSyncError: (error.message || 'sync failed').slice(0, 500),
-    });
-    res.status(500).json({ message: 'Gmail sync failed', detail: error.message });
-  }
-};
-
 // @route   GET /api/gmail/candidates
 // @access  Private
 exports.listGmailCandidates = async (req, res) => {
@@ -390,7 +247,7 @@ exports.listGmailCandidates = async (req, res) => {
 // @access  Private
 exports.syncGmailSelected = async (req, res) => {
   try {
-    const { selections } = req.body; // Array<{ messageId, filename, password, statementType, ocrEngine }>
+    const { selections } = req.body; // Array<{ messageId, filename, password, statementType }>
     if (!selections || !Array.isArray(selections)) {
       return res.status(400).json({ message: 'No selections provided' });
     }
@@ -412,7 +269,12 @@ exports.syncGmailSelected = async (req, res) => {
 
     for (const sel of selections) {
       try {
-        const { messageId, filename, password, statementType = 'CREDIT_CARD', ocrEngine = 'gemini' } = sel;
+        const { messageId, filename, password, statementType = 'CREDIT_CARD' } = sel;
+        if (!password || !String(password).trim()) {
+          errors.push({ filename, error: 'Password is required for Gmail imports' });
+          continue;
+        }
+
         const pdfs = await extractPdfAttachments(gmail, messageId);
         const match = pdfs.find(p => p.filename === filename) || pdfs[0];
 
@@ -434,15 +296,13 @@ exports.syncGmailSelected = async (req, res) => {
           }
         }
 
-        const statement = await createStatementFromPdfBuffer({
+        const statement = await processStatementPdf({
           userId: user._id,
           pdfBuffer: match.buffer,
           originalFileName: filename,
-          pdfPassword: password,
+          pdfPassword: String(password).trim(),
           statementType,
-          ocrEngine,
           gmailMessageId: messageId,
-          targetPages: sel.targetPages
         });
 
         created.push({ statementId: statement._id, filename, bank: bankLabel });
@@ -476,38 +336,5 @@ exports.resetGmailSync = async (req, res) => {
   } catch (error) {
     console.error('resetGmailSync', error);
     res.status(500).json({ message: 'Server error' });
-  }
-};
-// @route   POST /api/gmail/preview-unlocked
-// @access  Private
-exports.previewGmailPdf = async (req, res) => {
-  try {
-    const { messageId, filename, password } = req.body;
-    if (!messageId || !filename) return res.status(400).json({ message: 'Missing parameters' });
-
-    const user = await User.findById(req.user._id).select('+gmailRefreshToken');
-    if (!user?.gmailRefreshToken) return res.status(400).json({ message: 'Connect Gmail first' });
-
-    const oauth2Client = createOAuth2Client();
-    oauth2Client.setCredentials({
-      refresh_token: user.gmailRefreshToken,
-      access_token: user.gmailAccessToken || undefined,
-      expiry_date: user.gmailTokenExpiry ? user.gmailTokenExpiry.getTime() : undefined,
-    });
-
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-    const pdfs = await extractPdfAttachments(gmail, messageId);
-    const match = pdfs.find(p => p.filename === filename) || pdfs[0];
-
-    if (!match) return res.status(404).json({ message: 'Attachment not found' });
-    
-    console.log(`[Preview] Retrived raw attachment: ${match.filename} (${match.buffer.length} bytes)`);
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="preview_${filename}"`);
-    res.send(match.buffer);
-  } catch (error) {
-    console.error('previewGmailPdf error:', error);
-    res.status(500).json({ message: 'Internal server error during preview' });
   }
 };

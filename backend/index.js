@@ -6,9 +6,6 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const userRoutes = require('./routes/userRoutes');
 const statementRoutes = require('./routes/statementRoutes');
-const vendorRuleRoutes = require('./routes/vendorRuleRoutes');
-const ocrRoutes = require('./routes/ocrRoutes');
-const mistralRoutes = require('./routes/mistralRoutes');
 const gmailRoutes = require('./routes/gmailRoutes');
 
 const app = express();
@@ -30,9 +27,6 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // Routes
 app.use('/api/users', userRoutes);
 app.use('/api/statements', statementRoutes);
-app.use('/api/vendor-rules', vendorRuleRoutes);
-app.use('/api/ocr', ocrRoutes);
-app.use('/api/mistral', mistralRoutes);
 app.use('/api/gmail', gmailRoutes);
 
 // Basic route

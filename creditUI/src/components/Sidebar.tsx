@@ -1,7 +1,7 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
-import { IconLayoutSidebar, IconHome, IconSettings, IconUsers, IconChevronLeft, IconChevronRight, IconFileText, IconMessage, IconLogout, IconScan, IconUpload, IconTerminal2, IconBrain } from "@tabler/icons-react"
+import { IconLayoutSidebar, IconHome, IconChevronLeft, IconChevronRight, IconFileText, IconLogout, IconUpload } from "@tabler/icons-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
@@ -27,15 +27,8 @@ export function Sidebar({ expanded, setExpanded, className }: SidebarProps) {
 
   const items = [
     { icon: IconHome, label: "Home", href: "/" },
-    { icon: IconUpload, label: "Upload Audit", href: "/upload" },
+    { icon: IconUpload, label: "Upload", href: "/upload" },
     { icon: IconFileText, label: "My Statements", href: "/statements" },
-    { icon: IconMessage, label: "Krishna Chat", href: "/chat" },
-    { icon: IconTerminal2, label: "Neural Injection", href: "/dummy" },
-    { icon: IconScan, label: "Tesseract OCR", href: "/tersract" },
-    { icon: IconScan, label: "GLM OCR", href: "/glm-ocr" },
-    { icon: IconBrain, label: "Mistral OCR", href: "/mistral-ocr" },
-    { icon: IconUsers, label: "Users", href: "/users" },
-    { icon: IconSettings, label: "Settings", href: "/settings" },
   ]
 
   return (
