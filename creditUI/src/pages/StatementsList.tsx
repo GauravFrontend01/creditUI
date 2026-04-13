@@ -11,8 +11,17 @@ import {
   IconAlertCircle,
   IconCheck,
   IconChevronDown,
+  IconTrash,
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import { txRuleKey } from "@/lib/vendorRules"
 
@@ -284,6 +293,14 @@ interface VendorRuleRow {
   vendorLabel?: string
 }
 
+function conciseStatus(st: Statement) {
+  const status = st.status || "COMPLETED"
+  if (status === "PENDING" || status === "PROCESSING") return { label: "Extracting", className: "bg-amber-50 text-amber-700 border-amber-100" }
+  if (status === "FAILED") return { label: "Failed", className: "bg-red-50 text-red-700 border-red-100" }
+  if (st.isApproved) return { label: "Verified", className: "bg-emerald-50 text-emerald-700 border-emerald-100" }
+  return { label: "Review", className: "bg-blue-50 text-blue-700 border-blue-100" }
+}
+
 export default function StatementsList() {
   const [statements, setStatements] = React.useState<Statement[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -292,6 +309,55 @@ export default function StatementsList() {
   const [spendHoverCat, setSpendHoverCat] = React.useState<string | null>(null)
   const spendHoverLeaveTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const navigate = useNavigate()
+
+  const [bulkOpen, setBulkOpen] = React.useState(false)
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
+  const [bulkDeleting, setBulkDeleting] = React.useState(false)
+
+  const selectAllIds = React.useCallback(() => {
+    setSelectedIds(new Set(statements.map((s) => s._id)))
+  }, [statements])
+
+  const clearSelection = React.useCallback(() => {
+    setSelectedIds(new Set())
+  }, [])
+
+  const toggleId = React.useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+
+  const toggleGroup = React.useCallback((items: Statement[]) => {
+    const ids = items.map((i) => i._id)
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      const allOn = ids.length > 0 && ids.every((id) => next.has(id))
+      if (allOn) ids.forEach((id) => next.delete(id))
+      else ids.forEach((id) => next.add(id))
+      return next
+    })
+  }, [])
+
+  const runBulkDelete = React.useCallback(async () => {
+    const ids = Array.from(selectedIds)
+    if (!ids.length) return
+    const remove = new Set(ids)
+    setBulkDeleting(true)
+    try {
+      await api.post("/api/statements/bulk-delete", { ids })
+      setStatements((prev) => prev.filter((s) => !remove.has(s._id)))
+      setBulkOpen(false)
+      clearSelection()
+    } catch (e) {
+      console.error("Bulk delete failed", e)
+    } finally {
+      setBulkDeleting(false)
+    }
+  }, [selectedIds, clearSelection])
 
   React.useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -360,6 +426,28 @@ export default function StatementsList() {
     
     return Object.values(groups).sort((a, b) => a.name.localeCompare(b.name))
   }, [statements, globalFilter])
+
+  /** Same bank × account grouping as the main list, without search filter (used for bulk delete). */
+  const groupedDataAll = React.useMemo(() => {
+    const groups: Record<string, { name: string; accNum: string; items: Statement[] }> = {}
+
+    statements.forEach((s) => {
+      const bankKey = s.bankName?.val || "Unknown Bank"
+      const accKey = s.accountNumber?.val || "N/A"
+      const key = `${bankKey}-${accKey}`
+
+      if (!groups[key]) {
+        groups[key] = {
+          name: bankKey,
+          accNum: s.accountNumber?.val || "",
+          items: [],
+        }
+      }
+      groups[key].items.push(s)
+    })
+
+    return Object.values(groups).sort((a, b) => a.name.localeCompare(b.name))
+  }, [statements])
 
   const creditStatements = statements.filter(s => s.type !== "BANK")
   const totalOutstanding = creditStatements.reduce((s, st) => s + (st.outstandingTotal?.val ?? 0), 0)
@@ -481,6 +569,18 @@ export default function StatementsList() {
                   className="h-12 w-80 pl-11 pr-4 bg-white border border-slate-200 rounded-2xl shadow-sm text-sm font-bold placeholder:text-slate-400 focus:outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary/30 transition-all"
                 />
               </div>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={statements.length === 0}
+                onClick={() => {
+                  selectAllIds()
+                  setBulkOpen(true)
+                }}
+                className="rounded-2xl px-5 h-12 gap-2 border-slate-200 font-black text-sm uppercase tracking-wider text-slate-700 hover:bg-red-50 hover:border-red-200 hover:text-red-700"
+              >
+                <IconTrash size={18} strokeWidth={2} /> Bulk delete
+              </Button>
               <Button
                 onClick={() => navigate("/")}
                 className="rounded-2xl px-6 h-12 gap-2 shadow-lg shadow-primary/20 font-black text-sm uppercase tracking-wider"
@@ -688,6 +788,160 @@ export default function StatementsList() {
             </div>
           )}
         </div>
+
+        <Dialog
+          open={bulkOpen}
+          onOpenChange={(open) => {
+            setBulkOpen(open)
+            if (open) selectAllIds()
+          }}
+        >
+          <DialogContent
+            showCloseButton
+            className="sm:max-w-2xl max-h-[min(90vh,720px)] flex flex-col gap-0 p-0 overflow-hidden rounded-[1.5rem]"
+          >
+            <div className="px-6 pt-6 pb-4 border-b border-slate-100 shrink-0">
+              <DialogHeader>
+                <DialogTitle className="text-xl font-black tracking-tight text-slate-900">
+                  Delete statements
+                </DialogTitle>
+                <DialogDescription className="text-sm text-slate-500 font-medium">
+                  Grouped by bank and account, same as your portfolio list. Uncheck anything you want to keep, then confirm.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="flex flex-wrap items-center gap-2 mt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg h-9 text-[11px] font-bold uppercase tracking-wide"
+                  onClick={selectAllIds}
+                >
+                  Select all
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg h-9 text-[11px] font-bold uppercase tracking-wide"
+                  onClick={clearSelection}
+                >
+                  Unselect all
+                </Button>
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest ml-auto tabular-nums">
+                  {selectedIds.size} of {statements.length} selected
+                </span>
+              </div>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-5">
+              {groupedDataAll.length === 0 ? (
+                <p className="text-sm text-slate-500 font-medium text-center py-8">No statements to show.</p>
+              ) : (
+                groupedDataAll.map((group) => {
+                  const gIds = group.items.map((i) => i._id)
+                  const allInGroup = gIds.length > 0 && gIds.every((id) => selectedIds.has(id))
+                  const someInGroup = gIds.some((id) => selectedIds.has(id))
+                  return (
+                    <div key={`${group.name}-${group.accNum}`} className="rounded-2xl border border-slate-100 bg-slate-50/40 overflow-hidden">
+                      <div className="flex items-center gap-3 px-4 py-3 bg-white/80 border-b border-slate-100/80">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary shrink-0"
+                          checked={allInGroup}
+                          ref={(el) => {
+                            if (el) el.indeterminate = someInGroup && !allInGroup
+                          }}
+                          onChange={() => toggleGroup(group.items)}
+                          aria-label={`Select all in ${group.name}`}
+                        />
+                        <IconCreditCard size={18} className="text-primary shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-black text-slate-900 truncate">{group.name}</p>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">
+                            {group.accNum ? `Acc ${group.accNum}` : "Unspecified account"} · {group.items.length} statement
+                            {group.items.length === 1 ? "" : "s"}
+                          </p>
+                        </div>
+                      </div>
+                      <ul className="divide-y divide-slate-100/80">
+                        {group.items
+                          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                          .map((st) => {
+                            const cs = conciseStatus(st)
+                            const primary =
+                              st.type === "BANK" ? fmt(st.closingBalance?.val) : fmt(st.outstandingTotal?.val)
+                            const period =
+                              st.statementPeriod?.from && st.statementPeriod?.to
+                                ? `${formatDate(st.statementPeriod.from)} — ${formatDate(st.statementPeriod.to)}`
+                                : formatDate(st.createdAt)
+                            return (
+                              <li key={st._id} className="flex items-start gap-3 px-4 py-2.5 bg-white/50 hover:bg-white/90 transition-colors">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 rounded border-slate-300 text-primary focus:ring-primary mt-0.5 shrink-0"
+                                  checked={selectedIds.has(st._id)}
+                                  onChange={() => toggleId(st._id)}
+                                  aria-label={`Select statement ${period}`}
+                                />
+                                <div className="min-w-0 flex-1 grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-x-4 gap-y-0.5 items-center">
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-bold text-slate-800 truncate">{period}</p>
+                                    <p className="text-[10px] font-semibold text-slate-400 tabular-nums">
+                                      {st.type === "BANK" ? "Bank" : "Card"} · {new Date(st.createdAt).toLocaleDateString("en-GB")}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center justify-end gap-2 sm:flex-col sm:items-end sm:gap-1">
+                                    <span
+                                      className={cn(
+                                        "text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full border",
+                                        cs.className
+                                      )}
+                                    >
+                                      {cs.label}
+                                    </span>
+                                    <span className="text-xs font-black text-slate-900 tabular-nums">{primary}</span>
+                                  </div>
+                                </div>
+                              </li>
+                            )
+                          })}
+                      </ul>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+
+            <DialogFooter className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 shrink-0 gap-2 sm:gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl font-bold"
+                onClick={() => setBulkOpen(false)}
+                disabled={bulkDeleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                className="rounded-xl font-bold bg-red-600 hover:bg-red-700 text-white gap-2"
+                disabled={selectedIds.size === 0 || bulkDeleting}
+                onClick={runBulkDelete}
+              >
+                {bulkDeleting ? (
+                  <>
+                    <IconLoader2 size={16} className="animate-spin" /> Deleting…
+                  </>
+                ) : (
+                  <>
+                    <IconTrash size={16} /> Delete {selectedIds.size || ""}
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
       </div>
     </div>

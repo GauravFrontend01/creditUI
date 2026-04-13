@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Statement = require('../models/Statement');
 const {
   processStatementPdf,
@@ -46,6 +47,29 @@ exports.getMyStatements = async (req, res) => {
     res.json(statements);
   } catch (error) {
     console.error(error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// @route   POST /api/statements/bulk-delete
+exports.bulkDeleteStatements = async (req, res) => {
+  try {
+    const raw = req.body?.ids;
+    const ids = Array.isArray(raw) ? raw.map((id) => String(id).trim()).filter(Boolean) : [];
+    if (!ids.length) {
+      return res.status(400).json({ message: 'No statement ids provided' });
+    }
+    const valid = ids.filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (!valid.length) {
+      return res.status(400).json({ message: 'No valid ids' });
+    }
+    const result = await Statement.deleteMany({
+      user: req.user._id,
+      _id: { $in: valid },
+    });
+    res.json({ deletedCount: result.deletedCount });
+  } catch (error) {
+    console.error('bulkDeleteStatements', error);
     res.status(500).json({ message: 'Server error' });
   }
 };

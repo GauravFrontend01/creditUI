@@ -5,6 +5,7 @@ const {
   createStatement,
   getMyStatements,
   getStatementById,
+  bulkDeleteStatements,
   approveStatement,
   rejectStatement,
   reIngestStatement,
@@ -28,6 +29,7 @@ const upload = multer({
 // POST: multipart/form-data fields: pdf (file), pdfPassword (string), statementType
 router.post('/', protect, upload.single('pdf'), createStatement);
 router.get('/', protect, getMyStatements);
+router.post('/bulk-delete', protect, bulkDeleteStatements);
 router.put('/:id/approve', protect, approveStatement);
 router.put('/:id/reject', protect, rejectStatement);
 router.post('/:id/re-ingest', protect, reIngestStatement);
