@@ -1,4 +1,34 @@
 const { PDFDocument } = require('pdf-lib');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+function tryDecryptWithQpdf(buffer, password) {
+  const tmpIn = path.join(os.tmpdir(), `enc-${Date.now()}-${Math.random().toString(16).slice(2)}.pdf`);
+  const tmpOut = path.join(os.tmpdir(), `dec-${Date.now()}-${Math.random().toString(16).slice(2)}.pdf`);
+  try {
+    fs.writeFileSync(tmpIn, buffer);
+    execFileSync('qpdf', ['--password', password, '--decrypt', tmpIn, tmpOut], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const out = fs.readFileSync(tmpOut);
+    return { buffer: out, isUnlocked: true };
+  } catch (e) {
+    const stderr = String(e?.stderr || e?.message || '');
+    const lower = stderr.toLowerCase();
+    if (lower.includes('invalid password') || lower.includes('incorrect password')) {
+      throw new Error('Incorrect password for PDF decryption.');
+    }
+    if (lower.includes('enoent') || lower.includes('not found')) {
+      return { buffer, isUnlocked: false, warning: 'qpdf is not installed (needed for some AES-encrypted PDFs).' };
+    }
+    return { buffer, isUnlocked: false, warning: `qpdf fallback failed: ${stderr}` };
+  } finally {
+    try { if (fs.existsSync(tmpIn)) fs.unlinkSync(tmpIn); } catch {}
+    try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch {}
+  }
+}
 
 async function decryptPdf(buffer, password) {
   if (!password) throw new Error('PDF password is required');
@@ -23,7 +53,11 @@ async function decryptPdf(buffer, password) {
     if (lower.includes('password') || lower.includes('encrypted')) {
       throw new Error('Incorrect password for PDF decryption.');
     }
-    throw new Error(`PDF decryption failed: ${err.message}`);
+
+    // Some bank statements use AES/object layouts pdf-lib cannot rewrite.
+    // Try qpdf as a robust fallback if available on host.
+    console.warn(`[PDF Service] pdf-lib decrypt failed, trying qpdf fallback: ${err.message}`);
+    return tryDecryptWithQpdf(buffer, trimmedPassword);
   }
 }
 

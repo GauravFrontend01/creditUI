@@ -13,10 +13,23 @@ import { cn } from '@/lib/utils';
 import api from '@/lib/api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
+import { PDFDocument } from 'pdf-lib';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+
+// Polyfill for environments where Map.prototype.getOrInsertComputed is unavailable.
+if (!(Map.prototype as any).getOrInsertComputed) {
+  (Map.prototype as any).getOrInsertComputed = function (key: unknown, compute: (k: unknown) => unknown) {
+    if (!this.has(key)) this.set(key, compute(key));
+    return this.get(key);
+  };
+}
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 const Upload = () => {
   const [file, setFile] = useState<File | null>(null);
-  const [password, setPassword] = useState('');
+  const [password, setPassword] = useState('gaur2607');
   const [isUploading, setIsUploading] = useState(false);
   const [errorHeader, setErrorHeader] = useState('');
   const [statementType, setStatementType] = useState<'CREDIT_CARD' | 'BANK'>('CREDIT_CARD');
@@ -68,20 +81,20 @@ const Upload = () => {
 
   const startUpload = async () => {
     if (!file) return;
-    if (!password.trim()) {
-      toast.error('Please enter the PDF password');
-      return;
-    }
 
     setIsUploading(true);
     setErrorHeader('');
 
-    const formData = new FormData();
-    formData.append('pdf', file);
-    formData.append('pdfPassword', password.trim());
-    formData.append('statementType', statementType);
-
     try {
+      const effectivePassword = password.trim() || 'gaur2607';
+      console.log(`[Frontend Unlock] Using password "${effectivePassword}" for ${file.name}`);
+
+      const unlockedFile = await unlockPdfInBrowser(file, effectivePassword);
+      const formData = new FormData();
+      formData.append('pdf', unlockedFile);
+      formData.append('statementType', statementType);
+      formData.append('isUnlocked', 'true');
+
       const { data } = await api.post('/api/statements', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
@@ -94,6 +107,39 @@ const Upload = () => {
     } finally {
       setIsUploading(false);
     }
+  };
+
+  const unlockPdfInBrowser = async (sourceFile: File, sourcePassword: string) => {
+    const buffer = await sourceFile.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({
+      data: buffer,
+      password: sourcePassword || undefined,
+    }).promise;
+
+    const rebuilt = await PDFDocument.create();
+    for (let i = 1; i <= pdf.numPages; i += 1) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Failed to create canvas context for PDF unlock');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      await page.render({ canvasContext: ctx, viewport } as any).promise;
+
+      const imgDataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      const imgBytes = await fetch(imgDataUrl).then((r) => r.arrayBuffer());
+      const jpg = await rebuilt.embedJpg(imgBytes);
+      const newPage = rebuilt.addPage([jpg.width, jpg.height]);
+      newPage.drawImage(jpg, { x: 0, y: 0, width: jpg.width, height: jpg.height });
+    }
+
+    const unlockedBytes = await rebuilt.save();
+    const unlockedArrayBuffer = unlockedBytes.buffer.slice(
+      unlockedBytes.byteOffset,
+      unlockedBytes.byteOffset + unlockedBytes.byteLength
+    ) as ArrayBuffer;
+    return new File([unlockedArrayBuffer], sourceFile.name, { type: 'application/pdf' });
   };
 
   const connectGmail = async () => {
@@ -124,7 +170,7 @@ const Upload = () => {
       
       const passes: Record<string, string> = {};
       fetched.forEach((c: any) => {
-        if (c.savedPassword) passes[c.id] = c.savedPassword;
+        passes[c.id] = c.savedPassword || 'gaur2607';
       });
       setCandidatePasswords(passes);
 

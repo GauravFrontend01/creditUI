@@ -9,9 +9,10 @@ exports.createStatement = async (req, res) => {
     const pdfFile = req.file;
     const pdfPassword = String(req.body.pdfPassword || '').trim();
     const statementType = req.body.statementType === 'BANK' ? 'BANK' : 'CREDIT_CARD';
+    const isUnlocked = String(req.body.isUnlocked || '').toLowerCase() === 'true';
 
     if (!pdfFile) return res.status(400).json({ message: 'No PDF file uploaded' });
-    if (!pdfPassword) return res.status(400).json({ message: 'PDF password is required' });
+    if (!isUnlocked && !pdfPassword) return res.status(400).json({ message: 'PDF password is required' });
 
     const statement = await processStatementPdf({
       userId: req.user._id,
@@ -19,6 +20,7 @@ exports.createStatement = async (req, res) => {
       originalFileName: pdfFile.originalname || 'statement.pdf',
       pdfPassword,
       statementType,
+      isPreUnlocked: isUnlocked,
     });
 
     res.status(201).json(statement);
