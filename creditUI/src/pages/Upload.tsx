@@ -6,6 +6,9 @@ import {
   IconUnlink,
   IconLock,
   IconBrain,
+  IconCheck,
+  IconX,
+  IconLoader2,
 } from '@tabler/icons-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -27,6 +30,21 @@ if (!(Map.prototype as any).getOrInsertComputed) {
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
+/** Quick open test — same as first step of unlock, without re-rendering pages. */
+async function canOpenPdfWithPassword(file: File, password: string, treatAsEncrypted: boolean): Promise<boolean> {
+  try {
+    const buf = await file.arrayBuffer();
+    const p = password.trim();
+    await pdfjsLib.getDocument({
+      data: buf,
+      password: treatAsEncrypted ? p : p || undefined,
+    }).promise;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const GMAIL_UPLOAD_CACHE_KEY = 'creditUI_gmail_upload_cache_v1';
 
 type GmailCachePayload = {
@@ -36,6 +54,8 @@ type GmailCachePayload = {
   candidatePasswords: Record<string, string>;
   statementType: 'CREDIT_CARD' | 'BANK';
 };
+
+type PwGateStatus = 'idle' | 'empty' | 'checking' | 'ok' | 'bad';
 
 function readGmailCache(): GmailCachePayload | null {
   try {
@@ -68,6 +88,9 @@ const Upload = () => {
   const [candidates, setCandidates] = useState<any[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [candidatePasswords, setCandidatePasswords] = useState<Record<string, string>>({});
+  /** Per-row password validation before Gmail upload (green tick / red when wrong). */
+  const [passwordGateStatus, setPasswordGateStatus] = useState<Record<string, PwGateStatus>>({});
+  const [gmailPipelineStep, setGmailPipelineStep] = useState<'idle' | 'checking_pw' | 'uploading'>('idle');
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const gmailOAuthToastDone = useRef(false);
@@ -246,6 +269,7 @@ const Upload = () => {
       } else {
         toast.success(`Found ${fetched.length} potential statement(s).`);
       }
+      setPasswordGateStatus({});
     } catch (e: any) {
       toast.error(e.response?.data?.message || 'Failed to fetch email candidates.');
     } finally {
@@ -275,33 +299,86 @@ const Upload = () => {
     return err.message || 'Request failed';
   };
 
-  /** Same path as manual upload: fetch PDF → unlock in browser → POST with isUnlocked (no server-side decrypt). */
+  const downloadGmailPdfAsFile = async (c: { messageId: string; filename: string }) => {
+    const { data: blob, headers } = await api.get<Blob>('/api/gmail/attachment', {
+      params: { messageId: c.messageId, filename: c.filename },
+      responseType: 'blob',
+    });
+    const ct = (headers['content-type'] || headers['Content-Type'] || '') as string;
+    if (ct.includes('application/json')) {
+      const text = await (blob as Blob).text();
+      const j = JSON.parse(text) as { message?: string };
+      throw new Error(j.message || 'Download failed');
+    }
+    return new File([blob as Blob], c.filename, { type: 'application/pdf' });
+  };
+
+  /** Same path as manual upload: validate passwords → fetch PDF → unlock in browser → POST with isUnlocked. */
   const syncSelectedCandidates = async () => {
     if (selectedIds.length === 0) return;
 
-    const rows = candidates.filter((c) => selectedIds.includes(c.id));
+    const rows = candidates.filter(
+      (c) => selectedIds.includes(c.id) && !c.alreadyProcessed && c.shouldProcess !== false
+    );
+    if (rows.length === 0) {
+      toast.message('No statements selected for processing.');
+      return;
+    }
+
     setGmailBusy(true);
-    let ok = 0;
-    const failures: string[] = [];
+    setGmailPipelineStep('checking_pw');
+
+    const treatEncrypted = (c: { encrypted?: boolean }) => c.encrypted !== false;
+    const gate: Record<string, PwGateStatus> = {};
 
     try {
+      let missing = false;
       for (const c of rows) {
-        if (c.alreadyProcessed) continue;
-        const effectivePassword = String(candidatePasswords[c.id] || '').trim() || 'gaur2607';
+        const enc = treatEncrypted(c);
+        const pwd = String(candidatePasswords[c.id] ?? '').trim();
+        if (enc && !pwd) {
+          gate[c.id] = 'empty';
+          missing = true;
+        }
+      }
+      if (missing) {
+        setPasswordGateStatus((prev) => ({ ...prev, ...gate }));
+        toast.error('Enter a PDF password for every selected encrypted statement.');
+        return;
+      }
+
+      for (const c of rows) {
+        const enc = treatEncrypted(c);
+        const pwd = String(candidatePasswords[c.id] ?? '').trim();
+        setPasswordGateStatus((prev) => ({ ...prev, [c.id]: 'checking' }));
         try {
-          const { data: blob, headers } = await api.get<Blob>('/api/gmail/attachment', {
-            params: { messageId: c.messageId, filename: c.filename },
-            responseType: 'blob',
-          });
+          const file = await downloadGmailPdfAsFile(c);
+          const opens = await canOpenPdfWithPassword(file, pwd, enc);
+          gate[c.id] = opens ? 'ok' : 'bad';
+          setPasswordGateStatus((prev) => ({ ...prev, [c.id]: opens ? 'ok' : 'bad' }));
+        } catch {
+          gate[c.id] = 'bad';
+          setPasswordGateStatus((prev) => ({ ...prev, [c.id]: 'bad' }));
+        }
+      }
 
-          const ct = (headers['content-type'] || headers['Content-Type'] || '') as string;
-          if (ct.includes('application/json')) {
-            const text = await (blob as Blob).text();
-            const j = JSON.parse(text) as { message?: string };
-            throw new Error(j.message || 'Download failed');
-          }
+      const allOk = rows.every((c) => gate[c.id] === 'ok');
+      if (!allOk) {
+        toast.error('Some passwords are wrong or the PDF could not be opened. Fix the rows in red, then try again.');
+        return;
+      }
 
-          const file = new File([blob as Blob], c.filename, { type: 'application/pdf' });
+      setGmailPipelineStep('uploading');
+
+      let ok = 0;
+      const failures: string[] = [];
+
+      for (const c of rows) {
+        const enc = treatEncrypted(c);
+        const pwd = String(candidatePasswords[c.id] ?? '').trim();
+        const effectivePassword = enc ? pwd : pwd || 'gaur2607';
+        try {
+          const file = await downloadGmailPdfAsFile(c);
           const unlockedFile = await unlockPdfInBrowser(file, effectivePassword);
 
           const formData = new FormData();
@@ -344,6 +421,7 @@ const Upload = () => {
       toast.error(await parseAxiosErrorMessage(e));
     } finally {
       setGmailBusy(false);
+      setGmailPipelineStep('idle');
     }
   };
 
@@ -356,6 +434,7 @@ const Upload = () => {
       setCandidates([]);
       setSelectedIds([]);
       setCandidatePasswords({});
+      setPasswordGateStatus({});
       await refreshGmailStatus();
       toast.success('Gmail disconnected.');
     } catch {
@@ -375,6 +454,7 @@ const Upload = () => {
       setCandidates([]);
       setSelectedIds([]);
       setCandidatePasswords({});
+      setPasswordGateStatus({});
       toast.success('Sync history cleared.');
       await refreshGmailStatus();
     } catch {
@@ -546,15 +626,54 @@ const Upload = () => {
                   </label>
                   {isSelected && !lockedAsDone && !classifierSkipped && (
                     <div className="pl-7">
-                      <div className="relative">
-                        <input
-                          type="password"
-                          placeholder="Enter PDF password"
-                          className="flex h-11 w-full rounded-xl border border-primary/10 bg-background px-3 py-2 pl-10 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                          value={candidatePasswords[c.id] || ''}
-                          onChange={(e) => setCandidatePasswords((prev) => ({ ...prev, [c.id]: e.target.value }))}
-                        />
-                        <IconLock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                      <div className="flex items-stretch gap-2">
+                        <div className="relative flex-1 min-w-0">
+                          <input
+                            type="password"
+                            placeholder={c.encrypted === false ? 'Password (optional if not encrypted)' : 'Enter PDF password'}
+                            className={cn(
+                              'flex h-11 w-full rounded-xl border bg-background px-3 py-2 pl-10 pr-3 text-sm focus-visible:outline-none focus-visible:ring-2',
+                              passwordGateStatus[c.id] === 'empty' || passwordGateStatus[c.id] === 'bad'
+                                ? 'border-red-400 focus-visible:ring-red-200 ring-2 ring-red-100'
+                                : passwordGateStatus[c.id] === 'ok'
+                                  ? 'border-emerald-400 focus-visible:ring-emerald-200 ring-2 ring-emerald-50'
+                                  : 'border-primary/10 focus-visible:ring-primary/20'
+                            )}
+                            value={candidatePasswords[c.id] || ''}
+                            onChange={(e) => {
+                              setCandidatePasswords((prev) => ({ ...prev, [c.id]: e.target.value }));
+                              setPasswordGateStatus((prev) => ({ ...prev, [c.id]: 'idle' }));
+                            }}
+                          />
+                          <IconLock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                        </div>
+                        <div
+                          className={cn(
+                            'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border bg-muted/30',
+                            passwordGateStatus[c.id] === 'empty' || passwordGateStatus[c.id] === 'bad'
+                              ? 'border-red-300 bg-red-50/80'
+                              : passwordGateStatus[c.id] === 'ok'
+                                ? 'border-emerald-200 bg-emerald-50/80'
+                                : 'border-transparent'
+                          )}
+                          title={
+                            passwordGateStatus[c.id] === 'ok'
+                              ? 'Password opens this PDF'
+                              : passwordGateStatus[c.id] === 'bad'
+                                ? 'Password does not open this PDF'
+                                : passwordGateStatus[c.id] === 'empty'
+                                  ? 'Password required'
+                                  : ''
+                          }
+                        >
+                          {passwordGateStatus[c.id] === 'checking' && (
+                            <IconLoader2 size={18} className="animate-spin text-primary" />
+                          )}
+                          {passwordGateStatus[c.id] === 'ok' && <IconCheck size={18} className="text-emerald-600" strokeWidth={2.5} />}
+                          {(passwordGateStatus[c.id] === 'bad' || passwordGateStatus[c.id] === 'empty') && (
+                            <IconX size={18} className="text-red-600" strokeWidth={2.5} />
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -568,7 +687,11 @@ const Upload = () => {
               className="w-full h-11 rounded-xl gap-2"
             >
               <IconBrain size={16} />
-              {gmailBusy ? 'Processing...' : `Process selected (${selectedIds.length})`}
+              {gmailBusy && gmailPipelineStep === 'checking_pw'
+                ? 'Checking passwords...'
+                : gmailBusy && gmailPipelineStep === 'uploading'
+                  ? 'Processing...'
+                  : `Process selected (${selectedIds.length})`}
             </Button>
           </div>
         )}
