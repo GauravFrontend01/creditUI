@@ -9,6 +9,7 @@ const {
   resetGmailSync,
   listGmailCandidates,
   syncGmailSelected,
+  downloadGmailAttachment,
 } = require('../controllers/gmailController');
 
 router.get('/auth-url', protect, getGmailAuthUrl);
@@ -16,6 +17,7 @@ router.get('/oauth/callback', gmailOAuthCallback);
 router.get('/status', protect, getGmailStatus);
 router.post('/disconnect', protect, disconnectGmail);
 router.get('/candidates', protect, listGmailCandidates);
+router.get('/attachment', protect, downloadGmailAttachment);
 router.post('/sync-selected', protect, syncGmailSelected);
 router.post('/reset', protect, resetGmailSync);
 

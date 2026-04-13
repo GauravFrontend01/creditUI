@@ -2,6 +2,7 @@ const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenAI } = require('@google/genai');
 const Statement = require('../models/Statement');
+const User = require('../models/User');
 const { decryptPdf } = require('./pdfService');
 
 const supabase = createClient(
@@ -571,6 +572,21 @@ async function processStatementPdf({
   }
   await statement.save();
   console.log(`[Pipeline] Statement saved successfully with status=${statement.status}`);
+
+  if (gmailMessageId) {
+    try {
+      const user = await User.findById(userId).select('gmailImportedMessageIds');
+      if (user) {
+        const prev = user.gmailImportedMessageIds || [];
+        const merged = [...new Set([...prev, String(gmailMessageId)])];
+        user.gmailImportedMessageIds = merged.slice(-800);
+        await user.save();
+      }
+    } catch (e) {
+      console.warn('[Pipeline] Could not update gmailImportedMessageIds:', e?.message || e);
+    }
+  }
+
   return statement;
 }
 

@@ -16,6 +16,8 @@ exports.createStatement = async (req, res) => {
     const pdfPassword = String(req.body.pdfPassword || '').trim();
     const statementType = req.body.statementType === 'BANK' ? 'BANK' : 'CREDIT_CARD';
     const isUnlocked = String(req.body.isUnlocked || '').toLowerCase() === 'true';
+    const gmailMessageIdRaw = String(req.body.gmailMessageId || '').trim();
+    const gmailMessageId = gmailMessageIdRaw || null;
 
     if (!pdfFile) return res.status(400).json({ message: 'No PDF file uploaded' });
     if (!isUnlocked && !pdfPassword) return res.status(400).json({ message: 'PDF password is required' });
@@ -24,9 +26,10 @@ exports.createStatement = async (req, res) => {
       userId: req.user._id,
       pdfBuffer: pdfFile.buffer,
       originalFileName: pdfFile.originalname || 'statement.pdf',
-      pdfPassword,
+      pdfPassword: isUnlocked ? '' : pdfPassword,
       statementType,
       isPreUnlocked: isUnlocked,
+      gmailMessageId,
     });
 
     res.status(201).json(statement);

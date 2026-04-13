@@ -27,6 +27,36 @@ if (!(Map.prototype as any).getOrInsertComputed) {
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
+const GMAIL_UPLOAD_CACHE_KEY = 'creditUI_gmail_upload_cache_v1';
+
+type GmailCachePayload = {
+  email: string;
+  candidates: any[];
+  selectedIds: string[];
+  candidatePasswords: Record<string, string>;
+  statementType: 'CREDIT_CARD' | 'BANK';
+};
+
+function readGmailCache(): GmailCachePayload | null {
+  try {
+    const raw = localStorage.getItem(GMAIL_UPLOAD_CACHE_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as GmailCachePayload;
+    if (!p?.email || !Array.isArray(p.candidates)) return null;
+    return p;
+  } catch {
+    return null;
+  }
+}
+
+function writeGmailCache(payload: GmailCachePayload) {
+  localStorage.setItem(GMAIL_UPLOAD_CACHE_KEY, JSON.stringify(payload));
+}
+
+function clearGmailCache() {
+  localStorage.removeItem(GMAIL_UPLOAD_CACHE_KEY);
+}
+
 const Upload = () => {
   const [file, setFile] = useState<File | null>(null);
   const [password, setPassword] = useState('gaur2607');
@@ -41,6 +71,7 @@ const Upload = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const gmailOAuthToastDone = useRef(false);
+  const gmailRestoreDone = useRef(false);
 
   const refreshGmailStatus = useCallback(async () => {
     try {
@@ -58,6 +89,38 @@ const Upload = () => {
   useEffect(() => {
     refreshGmailStatus();
   }, [refreshGmailStatus]);
+
+  useEffect(() => {
+    gmailRestoreDone.current = false;
+  }, [gmailStatus?.email]);
+
+  /** Restore last Gmail scan (same browser) until Reset or Disconnect clears it. */
+  useEffect(() => {
+    if (!gmailStatus?.connected || !gmailStatus.email) return;
+    if (gmailRestoreDone.current) return;
+    const cached = readGmailCache();
+    if (!cached || cached.email !== gmailStatus.email) return;
+    if (cached.candidates.length === 0) return;
+    gmailRestoreDone.current = true;
+    setCandidates(cached.candidates);
+    setSelectedIds(cached.selectedIds?.length ? cached.selectedIds : cached.candidates.map((c: any) => c.id));
+    setCandidatePasswords(cached.candidatePasswords || {});
+    if (cached.statementType === 'CREDIT_CARD' || cached.statementType === 'BANK') {
+      setStatementType(cached.statementType);
+    }
+  }, [gmailStatus?.connected, gmailStatus?.email]);
+
+  useEffect(() => {
+    if (!gmailStatus?.connected || !gmailStatus.email) return;
+    if (candidates.length === 0) return;
+    writeGmailCache({
+      email: gmailStatus.email,
+      candidates,
+      selectedIds,
+      candidatePasswords,
+      statementType,
+    });
+  }, [gmailStatus?.connected, gmailStatus?.email, candidates, selectedIds, candidatePasswords, statementType]);
 
   useEffect(() => {
     const g = searchParams.get('gmail');
@@ -176,6 +239,10 @@ const Upload = () => {
 
       if (fetched.length === 0) {
         toast.message('No statement PDFs found in your recent emails.');
+        clearGmailCache();
+        setCandidates([]);
+        setSelectedIds([]);
+        setCandidatePasswords({});
       } else {
         toast.success(`Found ${fetched.length} potential statement(s).`);
       }
@@ -186,39 +253,87 @@ const Upload = () => {
     }
   };
 
+  const parseAxiosErrorMessage = async (e: unknown): Promise<string> => {
+    const err = e as { message?: string; response?: { data?: unknown; status?: number } };
+    const d = err.response?.data;
+    if (d instanceof Blob) {
+      try {
+        const t = await d.text();
+        const j = JSON.parse(t) as { message?: string };
+        return j.message || t || 'Request failed';
+      } catch {
+        try {
+          return await d.text();
+        } catch {
+          return err.message || 'Request failed';
+        }
+      }
+    }
+    if (d && typeof d === 'object' && 'message' in d && typeof (d as { message: string }).message === 'string') {
+      return (d as { message: string }).message;
+    }
+    return err.message || 'Request failed';
+  };
+
+  /** Same path as manual upload: fetch PDF → unlock in browser → POST with isUnlocked (no server-side decrypt). */
   const syncSelectedCandidates = async () => {
     if (selectedIds.length === 0) return;
-    const missingPassword = candidates
-      .filter(c => selectedIds.includes(c.id))
-      .find(c => !String(candidatePasswords[c.id] || '').trim());
-    if (missingPassword) {
-      toast.error(`Password missing for ${missingPassword.filename}`);
-      return;
-    }
 
+    const rows = candidates.filter((c) => selectedIds.includes(c.id));
     setGmailBusy(true);
-    try {
-      const selections = candidates
-        .filter(c => selectedIds.includes(c.id))
-        .map(c => ({
-          messageId: c.messageId,
-          filename: c.filename,
-          password: String(candidatePasswords[c.id] || '').trim(),
-          statementType,
-        }));
+    let ok = 0;
+    const failures: string[] = [];
 
-      const { data } = await api.post('/api/gmail/sync-selected', { selections });
-      const n = data.created?.length || 0;
-      if (n > 0) {
-        toast.success(`Successfully processed ${n} statement(s).`);
-        setCandidates([]);
-        navigate('/statements');
-      } else if (data.errors?.length > 0) {
-        toast.error(`Failed to sync: ${data.errors[0].error}`);
+    try {
+      for (const c of rows) {
+        const effectivePassword = String(candidatePasswords[c.id] || '').trim() || 'gaur2607';
+        try {
+          const { data: blob, headers } = await api.get<Blob>('/api/gmail/attachment', {
+            params: { messageId: c.messageId, filename: c.filename },
+            responseType: 'blob',
+          });
+
+          const ct = (headers['content-type'] || headers['Content-Type'] || '') as string;
+          if (ct.includes('application/json')) {
+            const text = await (blob as Blob).text();
+            const j = JSON.parse(text) as { message?: string };
+            throw new Error(j.message || 'Download failed');
+          }
+
+          const file = new File([blob as Blob], c.filename, { type: 'application/pdf' });
+          const unlockedFile = await unlockPdfInBrowser(file, effectivePassword);
+
+          const formData = new FormData();
+          formData.append('pdf', unlockedFile);
+          formData.append('statementType', statementType);
+          formData.append('isUnlocked', 'true');
+          formData.append('gmailMessageId', c.messageId);
+
+          await api.post('/api/statements', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+          ok += 1;
+        } catch (inner: unknown) {
+          const msg = await parseAxiosErrorMessage(inner);
+          failures.push(`${c.filename}: ${msg}`);
+        }
+      }
+
+      if (ok > 0) {
+        toast.success(
+          ok === rows.length
+            ? `Processed ${ok} statement(s). Open Statements to review.`
+            : `Processed ${ok} of ${rows.length}. Check errors for the rest.`
+        );
+        await fetchGmailCandidates();
+      }
+      if (failures.length > 0) {
+        toast.error(failures[0]);
+        if (failures.length > 1) console.warn('[Gmail sync] Other failures:', failures.slice(1));
       }
       await refreshGmailStatus();
-    } catch (e: any) {
-      toast.error(e.response?.data?.message || 'Sync failed.');
+    } catch (e: unknown) {
+      toast.error(await parseAxiosErrorMessage(e));
     } finally {
       setGmailBusy(false);
     }
@@ -228,6 +343,11 @@ const Upload = () => {
     setGmailBusy(true);
     try {
       await api.post('/api/gmail/disconnect');
+      clearGmailCache();
+      gmailRestoreDone.current = false;
+      setCandidates([]);
+      setSelectedIds([]);
+      setCandidatePasswords({});
       await refreshGmailStatus();
       toast.success('Gmail disconnected.');
     } catch {
@@ -242,6 +362,11 @@ const Upload = () => {
     setGmailBusy(true);
     try {
       await api.post('/api/gmail/reset');
+      clearGmailCache();
+      gmailRestoreDone.current = false;
+      setCandidates([]);
+      setSelectedIds([]);
+      setCandidatePasswords({});
       toast.success('Sync history cleared.');
       await refreshGmailStatus();
     } catch {
@@ -262,30 +387,34 @@ const Upload = () => {
         </p>
       </div>
 
+      <Card className="rounded-2xl p-6 bg-muted/20 border border-primary/10 space-y-4">
+        <div className="flex flex-col gap-2">
+          <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+            Statement type (manual upload &amp; Gmail sync)
+          </span>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant={statementType === 'CREDIT_CARD' ? 'default' : 'outline'}
+              onClick={() => setStatementType('CREDIT_CARD')}
+            >
+              Credit Card
+            </Button>
+            <Button
+              type="button"
+              variant={statementType === 'BANK' ? 'default' : 'outline'}
+              onClick={() => setStatementType('BANK')}
+            >
+              Bank
+            </Button>
+          </div>
+        </div>
+      </Card>
+
       <Card className="rounded-2xl p-6 bg-muted/20 border border-primary/10 space-y-5">
         <h2 className="text-lg font-semibold">Manual Upload</h2>
 
         <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <span className="text-[11px] text-muted-foreground">Statement Type</span>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant={statementType === 'CREDIT_CARD' ? 'default' : 'outline'}
-                onClick={() => setStatementType('CREDIT_CARD')}
-              >
-                Credit Card
-              </Button>
-              <Button
-                type="button"
-                variant={statementType === 'BANK' ? 'default' : 'outline'}
-                onClick={() => setStatementType('BANK')}
-              >
-                Bank
-              </Button>
-            </div>
-          </div>
-
           <label className="relative border border-dashed border-primary/20 rounded-xl p-8 text-center bg-background cursor-pointer">
             <input type="file" className="hidden" onChange={handleFileChange} accept=".pdf" />
             <div className="flex flex-col items-center gap-2">
@@ -317,7 +446,7 @@ const Upload = () => {
         </div>
       </Card>
 
-      <Card className="rounded-2xl p-6 bg-muted/20 border border-primary/10 space-y-4">
+      <Card className="rounded-2xl p-6 bg-muted/20 border border-primary/10 space-y-5">
         <div className="flex items-start gap-3">
           <div className="p-2 rounded-lg bg-background text-primary">
             <IconMail size={18} />
@@ -325,7 +454,9 @@ const Upload = () => {
           <div className="space-y-1">
             <h2 className="text-lg font-semibold">Gmail Sync</h2>
             <p className="text-xs text-muted-foreground">
-              Fetch statement PDFs from Gmail, enter passwords, and process with the same backend pipeline.
+              PDFs are downloaded here, unlocked in the browser (same as manual upload), then sent with <span className="font-semibold text-foreground">isUnlocked</span> so the server skips decrypt and runs the same Vertex pipeline.
+              Your last inbox scan list and passwords stay on this page until you <span className="font-semibold text-foreground">Reset</span> or{' '}
+              <span className="font-semibold text-foreground">Disconnect</span> (or until a new scan returns no PDFs).
             </p>
             {gmailStatus?.connected && gmailStatus.email && (
               <p className="text-xs text-emerald-700 font-semibold">Connected: {gmailStatus.email}</p>
@@ -356,40 +487,59 @@ const Upload = () => {
         </div>
 
         {candidates.length > 0 && (
-          <div className="space-y-3 border-t border-primary/10 pt-4">
+          <div className="space-y-4 border-t border-primary/10 pt-4">
+            <p className="text-[11px] text-muted-foreground font-medium">
+              Select PDFs (same layout as manual: file name → password), then process.
+            </p>
             {candidates.map((c) => {
               const isSelected = selectedIds.includes(c.id);
               return (
-                <div key={c.id} className={cn('p-3 rounded-xl border bg-background', !isSelected && 'opacity-60')}>
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() =>
-                          setSelectedIds((prev) => (isSelected ? prev.filter((id) => id !== c.id) : [...prev, c.id]))
-                        }
-                      />
-                      <span>{c.filename}</span>
-                    </label>
-                    <span className="text-[11px] text-muted-foreground">{c.bank}</span>
-                  </div>
+                <div
+                  key={c.id}
+                  className={cn(
+                    'rounded-xl border border-primary/10 bg-background p-4 space-y-3 transition-opacity',
+                    !isSelected && 'opacity-60'
+                  )}
+                >
+                  <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-1 rounded border-primary/30"
+                      checked={isSelected}
+                      onChange={() =>
+                        setSelectedIds((prev) => (isSelected ? prev.filter((id) => id !== c.id) : [...prev, c.id]))
+                      }
+                    />
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="text-sm font-medium break-all">{c.filename}</p>
+                      <p className="text-[11px] text-muted-foreground">{c.bank}</p>
+                    </div>
+                  </label>
                   {isSelected && (
-                    <div className="mt-2">
-                      <input
-                        type="password"
-                        placeholder="Enter PDF password"
-                        className="flex h-9 w-full rounded-lg border border-primary/10 bg-background px-3 py-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                        value={candidatePasswords[c.id] || ''}
-                        onChange={(e) => setCandidatePasswords((prev) => ({ ...prev, [c.id]: e.target.value }))}
-                      />
+                    <div className="pl-7">
+                      <div className="relative">
+                        <input
+                          type="password"
+                          placeholder="Enter PDF password"
+                          className="flex h-11 w-full rounded-xl border border-primary/10 bg-background px-3 py-2 pl-10 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                          value={candidatePasswords[c.id] || ''}
+                          onChange={(e) => setCandidatePasswords((prev) => ({ ...prev, [c.id]: e.target.value }))}
+                        />
+                        <IconLock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                      </div>
                     </div>
                   )}
                 </div>
               );
             })}
-            <Button onClick={syncSelectedCandidates} disabled={gmailBusy || selectedIds.length === 0} className="w-full">
-              {gmailBusy ? 'Processing...' : `Process Selected (${selectedIds.length})`}
+            <Button
+              type="button"
+              onClick={syncSelectedCandidates}
+              disabled={gmailBusy || selectedIds.length === 0}
+              className="w-full h-11 rounded-xl gap-2"
+            >
+              <IconBrain size={16} />
+              {gmailBusy ? 'Processing...' : `Process selected (${selectedIds.length})`}
             </Button>
           </div>
         )}

@@ -325,6 +325,50 @@ exports.syncGmailSelected = async (req, res) => {
   }
 };
 
+// @route   GET /api/gmail/attachment?messageId=&filename=
+// @access  Private — raw PDF bytes for browser-side unlock (same flow as manual upload)
+exports.downloadGmailAttachment = async (req, res) => {
+  try {
+    const messageId = String(req.query.messageId || '').trim();
+    const filename = String(req.query.filename || '').trim();
+    if (!messageId || !filename) {
+      return res.status(400).json({ message: 'messageId and filename are required' });
+    }
+
+    const user = await User.findById(req.user._id).select('+gmailRefreshToken');
+    if (!user?.gmailRefreshToken) {
+      return res.status(400).json({ message: 'Connect Gmail first' });
+    }
+
+    const oauth2Client = createOAuth2Client();
+    oauth2Client.setCredentials({
+      refresh_token: user.gmailRefreshToken,
+      access_token: user.gmailAccessToken || undefined,
+      expiry_date: user.gmailTokenExpiry ? user.gmailTokenExpiry.getTime() : undefined,
+    });
+
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    const pdfs = await extractPdfAttachments(gmail, messageId);
+    const match = pdfs.find((p) => p.filename === filename) || pdfs[0];
+    if (!match || !match.buffer?.length) {
+      return res.status(404).json({ message: 'PDF attachment not found' });
+    }
+
+    user.gmailAccessToken = oauth2Client.credentials.access_token || user.gmailAccessToken;
+    if (oauth2Client.credentials.expiry_date) {
+      user.gmailTokenExpiry = new Date(oauth2Client.credentials.expiry_date);
+    }
+    await user.save();
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(match.filename)}`);
+    return res.send(match.buffer);
+  } catch (error) {
+    console.error('downloadGmailAttachment', error);
+    res.status(500).json({ message: error.message || 'Failed to download attachment' });
+  }
+};
+
 // @route   POST /api/gmail/reset
 // @access  Private
 exports.resetGmailSync = async (req, res) => {
