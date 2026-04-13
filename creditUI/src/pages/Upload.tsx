@@ -227,7 +227,7 @@ const Upload = () => {
       setCandidates(fetched);
 
       const fresh = fetched
-        .filter((c: any) => !c.isImported || !c.existsInDb)
+        .filter((c: any) => !c.alreadyProcessed && (!c.isImported || !c.existsInDb))
         .map((c: any) => c.id);
       setSelectedIds(fresh);
       
@@ -286,6 +286,7 @@ const Upload = () => {
 
     try {
       for (const c of rows) {
+        if (c.alreadyProcessed) continue;
         const effectivePassword = String(candidatePasswords[c.id] || '').trim() || 'gaur2607';
         try {
           const { data: blob, headers } = await api.get<Blob>('/api/gmail/attachment', {
@@ -308,11 +309,18 @@ const Upload = () => {
           formData.append('statementType', statementType);
           formData.append('isUnlocked', 'true');
           formData.append('gmailMessageId', c.messageId);
+          if (c.parsedPeriod?.from) formData.append('emailPeriodFrom', String(c.parsedPeriod.from));
+          if (c.parsedPeriod?.to) formData.append('emailPeriodTo', String(c.parsedPeriod.to));
+          if (c.accountHint) formData.append('emailAccountHint', String(c.accountHint));
 
-          await api.post('/api/statements', formData, {
+          const { data: created } = await api.post('/api/statements', formData, {
             headers: { 'Content-Type': 'multipart/form-data' },
           });
-          ok += 1;
+          if (created?.alreadyProcessed) {
+            failures.push(`${c.filename}: already processed (${created.existingStatementId || 'existing record'})`);
+          } else {
+            ok += 1;
+          }
         } catch (inner: unknown) {
           const msg = await parseAxiosErrorMessage(inner);
           failures.push(`${c.filename}: ${msg}`);
@@ -493,12 +501,13 @@ const Upload = () => {
             </p>
             {candidates.map((c) => {
               const isSelected = selectedIds.includes(c.id);
+              const lockedAsDone = Boolean(c.alreadyProcessed);
               return (
                 <div
                   key={c.id}
                   className={cn(
                     'rounded-xl border border-primary/10 bg-background p-4 space-y-3 transition-opacity',
-                    !isSelected && 'opacity-60'
+                    (!isSelected || lockedAsDone) && 'opacity-60'
                   )}
                 >
                   <label className="flex items-start gap-3 cursor-pointer">
@@ -506,16 +515,27 @@ const Upload = () => {
                       type="checkbox"
                       className="mt-1 rounded border-primary/30"
                       checked={isSelected}
+                      disabled={lockedAsDone}
                       onChange={() =>
                         setSelectedIds((prev) => (isSelected ? prev.filter((id) => id !== c.id) : [...prev, c.id]))
                       }
                     />
                     <div className="min-w-0 flex-1 space-y-1">
                       <p className="text-sm font-medium break-all">{c.filename}</p>
-                      <p className="text-[11px] text-muted-foreground">{c.bank}</p>
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                        <span>{c.bank}</span>
+                        {c.parsedPeriod?.from && c.parsedPeriod?.to && (
+                          <span>· {c.parsedPeriod.from} to {c.parsedPeriod.to}</span>
+                        )}
+                        {lockedAsDone && (
+                          <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-100 font-semibold">
+                            already_processed
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </label>
-                  {isSelected && (
+                  {isSelected && !lockedAsDone && (
                     <div className="pl-7">
                       <div className="relative">
                         <input

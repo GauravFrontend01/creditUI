@@ -7,6 +7,76 @@ const {
   applyExtraction,
 } = require('../services/statementPipelineService');
 
+function toIsoDate(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function parseLooseDate(input) {
+  const s = String(input || '').trim();
+  if (!s) return null;
+  const direct = new Date(s);
+  if (!Number.isNaN(direct.getTime())) return direct;
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (dmy) {
+    const day = Number(dmy[1]);
+    const month = Number(dmy[2]) - 1;
+    const year = Number(dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3]);
+    const dt = new Date(year, month, day);
+    if (!Number.isNaN(dt.getTime())) return dt;
+  }
+  const text = s.match(/^(\d{1,2})[\s\-\/]([A-Za-z]{3,9})[\s\-\/,]*(\d{4})$/);
+  if (text) {
+    const MONTHS = { jan: 0, january: 0, feb: 1, february: 1, mar: 2, march: 2, apr: 3, april: 3, may: 4, jun: 5, june: 5, jul: 6, july: 6, aug: 7, august: 7, sep: 8, sept: 8, september: 8, oct: 9, october: 9, nov: 10, november: 10, dec: 11, december: 11 };
+    const day = Number(text[1]);
+    const month = MONTHS[String(text[2]).toLowerCase()];
+    const year = Number(text[3]);
+    if (month !== undefined) {
+      const dt = new Date(year, month, day);
+      if (!Number.isNaN(dt.getTime())) return dt;
+    }
+  }
+  return null;
+}
+
+function digitsOnly(s) {
+  return String(s || '').replace(/\D/g, '');
+}
+
+function accountLikelyMatches(hint, accountVal) {
+  const h = digitsOnly(hint);
+  const a = digitsOnly(accountVal);
+  if (!h || !a) return false;
+  if (h.length <= 4) return a.endsWith(h);
+  return a.endsWith(h.slice(-4));
+}
+
+async function findDuplicateByGmailMetadata(userId, accountHint, fromDate, toDate) {
+  if (!accountHint || !fromDate || !toDate) return null;
+  const fromIso = toIsoDate(parseLooseDate(fromDate));
+  const toIso = toIsoDate(parseLooseDate(toDate));
+  if (!fromIso || !toIso) return null;
+
+  const existing = await Statement.find({
+    user: userId,
+    isUserRejected: { $ne: true },
+  })
+    .select('_id accountNumber statementPeriod')
+    .lean();
+
+  for (const st of existing) {
+    const acc = st?.accountNumber?.val || '';
+    if (!accountLikelyMatches(accountHint, acc)) continue;
+    const f = toIsoDate(parseLooseDate(st?.statementPeriod?.from || ''));
+    const t = toIsoDate(parseLooseDate(st?.statementPeriod?.to || ''));
+    if (f === fromIso && t === toIso) return st;
+  }
+  return null;
+}
+
 // @desc    Manual upload: unlock -> store -> Vertex -> save
 // @route   POST /api/statements
 // @access  Private
@@ -18,9 +88,28 @@ exports.createStatement = async (req, res) => {
     const isUnlocked = String(req.body.isUnlocked || '').toLowerCase() === 'true';
     const gmailMessageIdRaw = String(req.body.gmailMessageId || '').trim();
     const gmailMessageId = gmailMessageIdRaw || null;
+    const emailPeriodFrom = String(req.body.emailPeriodFrom || '').trim();
+    const emailPeriodTo = String(req.body.emailPeriodTo || '').trim();
+    const emailAccountHint = String(req.body.emailAccountHint || '').trim();
 
     if (!pdfFile) return res.status(400).json({ message: 'No PDF file uploaded' });
     if (!isUnlocked && !pdfPassword) return res.status(400).json({ message: 'PDF password is required' });
+
+    if (gmailMessageId && emailPeriodFrom && emailPeriodTo && emailAccountHint) {
+      const dup = await findDuplicateByGmailMetadata(
+        req.user._id,
+        emailAccountHint,
+        emailPeriodFrom,
+        emailPeriodTo
+      );
+      if (dup) {
+        return res.status(200).json({
+          alreadyProcessed: true,
+          existingStatementId: dup._id,
+          message: 'Statement already processed for this account and period',
+        });
+      }
+    }
 
     const statement = await processStatementPdf({
       userId: req.user._id,

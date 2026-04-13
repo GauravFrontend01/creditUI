@@ -32,6 +32,127 @@ function identifyBank(subject, from) {
   return 'Other';
 }
 
+const MONTHS = {
+  jan: 0, january: 0,
+  feb: 1, february: 1,
+  mar: 2, march: 2,
+  apr: 3, april: 3,
+  may: 4,
+  jun: 5, june: 5,
+  jul: 6, july: 6,
+  aug: 7, august: 7,
+  sep: 8, sept: 8, september: 8,
+  oct: 9, october: 9,
+  nov: 10, november: 10,
+  dec: 11, december: 11,
+};
+
+function toIsoDate(d) {
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function parseLooseDate(input) {
+  const s = String(input || '').trim();
+  if (!s) return null;
+
+  const direct = new Date(s);
+  if (!Number.isNaN(direct.getTime())) return direct;
+
+  const dmyNum = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (dmyNum) {
+    const day = Number(dmyNum[1]);
+    const month = Number(dmyNum[2]) - 1;
+    const year = Number(dmyNum[3].length === 2 ? `20${dmyNum[3]}` : dmyNum[3]);
+    const dt = new Date(year, month, day);
+    if (!Number.isNaN(dt.getTime())) return dt;
+  }
+
+  const dmyText = s.match(/^(\d{1,2})[\s\-\/]([A-Za-z]{3,9})[\s\-\/,]*(\d{4})$/);
+  if (dmyText) {
+    const day = Number(dmyText[1]);
+    const month = MONTHS[dmyText[2].toLowerCase()];
+    const year = Number(dmyText[3]);
+    if (month !== undefined) {
+      const dt = new Date(year, month, day);
+      if (!Number.isNaN(dt.getTime())) return dt;
+    }
+  }
+  return null;
+}
+
+function extractDateRangeFromEmail(subject, body, filename) {
+  const subjectText = String(subject || '');
+  const bodyText = String(body || '');
+  const filenameText = String(filename || '');
+  const joined = `${subjectText}\n${bodyText}\n${filenameText}`;
+
+  // "01 Mar 2026 to 31 Mar 2026"
+  const periodRegex = /(\d{1,2}[\/\-\s][A-Za-z]{3,9}[\/\-\s,]*\d{4})\s*(?:to|-)\s*(\d{1,2}[\/\-\s][A-Za-z]{3,9}[\/\-\s,]*\d{4})/i;
+  const periodMatch = joined.match(periodRegex);
+  if (periodMatch) {
+    const from = parseLooseDate(periodMatch[1]);
+    const to = parseLooseDate(periodMatch[2]);
+    if (from && to) {
+      return { from: toIsoDate(from), to: toIsoDate(to), source: 'explicit_period' };
+    }
+  }
+
+  // "for March 2026", "Mar-2026", "Mar2026"
+  const monthYearRegex = /\b(?:for\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)[\s\-_]*(\d{4})\b/i;
+  const monthMatch = joined.match(monthYearRegex);
+  if (monthMatch) {
+    const month = MONTHS[monthMatch[1].toLowerCase()];
+    const year = Number(monthMatch[2]);
+    if (month !== undefined && !Number.isNaN(year)) {
+      const from = new Date(year, month, 1);
+      const to = new Date(year, month + 1, 0);
+      return { from: toIsoDate(from), to: toIsoDate(to), source: 'month_year' };
+    }
+  }
+
+  return null;
+}
+
+function extractAccountHint(subject, body, filename) {
+  const text = `${subject || ''} ${body || ''} ${filename || ''}`;
+  const masked = text.match(/\b\d{2,}[X*x*]{2,}[X*x*\d]{0,}\d{2,}\b/);
+  if (masked) return masked[0].replace(/\*/g, 'X');
+
+  const acct = text.match(/\b(?:a\/?c|account)\s*(?:no|number|#)?\s*[:\-]?\s*([A-Za-z0-9X*]{6,})/i);
+  if (acct?.[1]) return acct[1].replace(/\*/g, 'X');
+
+  return '';
+}
+
+function digitsOnly(s) {
+  return String(s || '').replace(/\D/g, '');
+}
+
+function accountLikelyMatches(hint, accountVal) {
+  const h = digitsOnly(hint);
+  const a = digitsOnly(accountVal);
+  if (!h) return false;
+  if (!a) return false;
+  if (h.length <= 4) return a.endsWith(h);
+  return a.endsWith(h.slice(-4));
+}
+
+function isDuplicateByMetadata(existing, accountHint, fromIso, toIso) {
+  if (!accountHint || !fromIso || !toIso) return false;
+  for (const st of existing) {
+    const acc = st?.accountNumber?.val || '';
+    if (!accountLikelyMatches(accountHint, acc)) continue;
+    const f = toIsoDate(parseLooseDate(st?.statementPeriod?.from || ''));
+    const t = toIsoDate(parseLooseDate(st?.statementPeriod?.to || ''));
+    if (f === fromIso && t === toIso) return true;
+  }
+  return false;
+}
+
 const FRONTEND = () => (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 
 function redirectWithMessage(res, params) {
@@ -191,6 +312,12 @@ exports.listGmailCandidates = async (req, res) => {
 
     const messageRefs = listRes.data.messages || [];
     const imported = new Set(user.gmailImportedMessageIds || []);
+    const existingStatements = await Statement.find({
+      user: user._id,
+      isUserRejected: { $ne: true },
+    })
+      .select('accountNumber statementPeriod')
+      .lean();
     const candidates = [];
 
     for (const ref of messageRefs) {
@@ -203,6 +330,7 @@ exports.listGmailCandidates = async (req, res) => {
         const subject = (headers.find(h => h.name?.toLowerCase() === 'subject')?.value || '').trim();
         const from = (headers.find(h => h.name?.toLowerCase() === 'from')?.value || '').trim();
         const date = (headers.find(h => h.name?.toLowerCase() === 'date')?.value || '');
+        const snippet = String(full.data.snippet || '');
 
         const pdfs = await extractPdfAttachments(gmail, messageId);
         if (pdfs.length === 0) continue;
@@ -210,6 +338,13 @@ exports.listGmailCandidates = async (req, res) => {
         for (const pdf of pdfs) {
           const bank = identifyBank(subject, from);
           const encrypted = await isPdfEncrypted(pdf.buffer);
+          const dateRange = extractDateRangeFromEmail(subject, snippet, pdf.filename);
+          const accountHint = extractAccountHint(subject, snippet, pdf.filename);
+          const alreadyProcessed = !!(
+            dateRange &&
+            accountHint &&
+            isDuplicateByMetadata(existingStatements, accountHint, dateRange.from, dateRange.to)
+          );
           
           let savedPassword = '';
           if (encrypted && user.bankPasswords?.length) {
@@ -223,11 +358,18 @@ exports.listGmailCandidates = async (req, res) => {
             subject,
             from,
             date,
+            snippet,
             filename: pdf.filename,
             bank,
             isImported,
             encrypted,
             savedPassword,
+            accountHint,
+            parsedPeriod: dateRange || null,
+            alreadyProcessed,
+            alreadyProcessedReason: alreadyProcessed
+              ? `Statement already exists for account hint ${accountHint} and period ${dateRange.from} to ${dateRange.to}`
+              : '',
             existsInDb: isImported ? await Statement.exists({ user: user._id, gmailMessageId: messageId }) : false,
           });
         }
@@ -284,6 +426,24 @@ exports.syncGmailSelected = async (req, res) => {
         }
 
         const bankLabel = identifyBank(match.subject, match.from);
+        const guessedPeriod = extractDateRangeFromEmail(match.subject, '', filename);
+        const guessedAccount = extractAccountHint(match.subject, '', filename);
+        if (
+          guessedPeriod &&
+          guessedAccount &&
+          isDuplicateByMetadata(
+            await Statement.find({
+              user: user._id,
+              isUserRejected: { $ne: true },
+            }).select('accountNumber statementPeriod').lean(),
+            guessedAccount,
+            guessedPeriod.from,
+            guessedPeriod.to
+          )
+        ) {
+          errors.push({ filename, error: 'already_processed' });
+          continue;
+        }
 
         // Save password if provided
         if (password && bankLabel !== 'Other') {
