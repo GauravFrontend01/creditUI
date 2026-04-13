@@ -1223,13 +1223,17 @@ function Statement() {
              </p>
 
              <div className="flex flex-col gap-4 w-full max-w-sm">
-                <Button 
-                  variant="outline"
-                  onClick={handleDownloadUnlocked}
-                  className="rounded-2xl h-14 border-slate-200 text-slate-600 font-bold uppercase tracking-widest gap-2 hover:bg-slate-50 transition-all mb-2"
-                >
-                  <IconDownload size={18} /> Download Unlocked PDF
-                </Button>
+                <div className="flex justify-center mb-2">
+                  <Button
+                    variant="outline"
+                    onClick={handleDownloadUnlocked}
+                    size="icon"
+                    className="rounded-2xl h-14 w-14 border-slate-200 text-slate-600 hover:bg-slate-50 transition-all shrink-0"
+                    title="Download unlocked PDF"
+                  >
+                    <IconDownload size={22} strokeWidth={2} />
+                  </Button>
+                </div>
 
                 <div className="flex bg-slate-100 p-1 rounded-2xl gap-1 border border-slate-200/50 mb-4">
                   <button
@@ -1339,32 +1343,13 @@ function Statement() {
                   <Button
                     onClick={handleDownloadUnlocked}
                     variant="outline"
-                    className="rounded-xl px-6 h-11 gap-2 border-primary text-primary hover:bg-primary/5 font-bold text-xs uppercase tracking-widest transition-all"
+                    size="icon"
+                    className="rounded-xl h-11 w-11 shrink-0 border-primary text-primary hover:bg-primary/5"
+                    title="Unlocked PDF"
                   >
-                    <IconDownload size={16} /> Unlocked PDF
+                    <IconDownload size={18} strokeWidth={2} />
                   </Button>
-                  {data.reconciliation && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setShowMathDetails(true)}
-                      className="rounded-xl px-6 h-11 gap-2 border-slate-200 font-bold text-xs uppercase tracking-widest transition-all"
-                    >
-                      <IconEqual size={16} /> Numbers check
-                    </Button>
-                  )}
                 </div>
-              )}
-
-              {isSavedView && data.isApproved && data.status === 'COMPLETED' && data.reconciliation && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setShowMathDetails(true)}
-                  className="rounded-xl px-6 h-11 gap-2 border-slate-200 font-bold text-xs uppercase tracking-widest"
-                >
-                  <IconEqual size={16} /> Numbers check
-                </Button>
               )}
 
               {isSavedView && (
