@@ -7,6 +7,7 @@ const {
   buildGmailAuthUrl,
   exchangeCodeForTokens,
   extractPdfAttachments,
+  getMessageBodyText,
   defaultGmailQuery,
   isPdfEncrypted,
   google,
@@ -216,6 +217,64 @@ Format:
   "skip": [{ "id": "candidate-id", "reason": "..." }]
 }
 `.trim();
+}
+
+function buildPasswordHintPrompt(emailBody) {
+  const body = String(emailBody || '').trim().slice(0, 24000);
+  return `
+You are helping a user understand how to open their password-protected bank statement PDF.
+
+Look at this email body and extract:
+1. How the password is constructed (the rule/formula)
+2. An example if given
+3. A short plain-English instruction for the user
+
+Email body:
+${body}
+
+Respond with ONLY valid JSON:
+{
+  "hasPasswordHint": true,
+  "passwordRule": "Date of birth in DDMMYYYY format",
+  "example": "If DOB is 15/07/1998, password is 15071998",
+  "userMessage": "Your PDF password is your date of birth in DDMMYYYY format (e.g. 15071998)"
+}
+
+If no password hint is found, respond:
+{
+  "hasPasswordHint": false,
+  "passwordRule": null,
+  "example": null,
+  "userMessage": null
+}
+`.trim();
+}
+
+async function extractPasswordHintWithGemini(emailBody) {
+  const trimmed = String(emailBody || '').trim();
+  if (!trimmed) {
+    return { hasPasswordHint: false, passwordRule: null, example: null, userMessage: null };
+  }
+
+  const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_PROJECT_ID || '';
+  const location = process.env.GOOGLE_CLOUD_LOCATION || process.env.GOOGLE_LOCATION || 'us-central1';
+  if (!project) throw new Error('Missing GOOGLE_PROJECT_ID for password hint extraction');
+
+  const client = new GoogleGenAI({ vertexai: true, project, location });
+  const prompt = buildPasswordHintPrompt(trimmed);
+  const response = await client.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: [prompt],
+    generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+  });
+  const raw = normalizeGeminiJson(readGeminiText(response));
+  const parsed = JSON.parse(raw || '{}');
+  return {
+    hasPasswordHint: !!parsed.hasPasswordHint,
+    passwordRule: parsed.passwordRule ?? null,
+    example: parsed.example ?? null,
+    userMessage: parsed.userMessage ?? null,
+  };
 }
 
 async function classifyCandidatesWithGemini(candidates) {
@@ -471,21 +530,44 @@ exports.listGmailCandidates = async (req, res) => {
       }
     }
 
+    const hintByMessage = new Map();
+    const encryptedMessageIds = [...new Set(candidates.filter((c) => c.encrypted).map((c) => c.messageId))];
+    for (const mid of encryptedMessageIds) {
+      try {
+        const bodyText = await getMessageBodyText(gmail, mid);
+        const hint = await extractPasswordHintWithGemini(bodyText);
+        hintByMessage.set(mid, hint);
+      } catch (e) {
+        console.warn('password hint extraction failed', mid, e?.message || e);
+        hintByMessage.set(mid, {
+          hasPasswordHint: false,
+          passwordRule: null,
+          example: null,
+          userMessage: null,
+        });
+      }
+    }
+
+    const candidatesWithHints = candidates.map((c) => ({
+      ...c,
+      passwordHint: c.encrypted ? hintByMessage.get(c.messageId) || null : null,
+    }));
+
     let processIds = new Set(
-      candidates
+      candidatesWithHints
         .filter((c) => !c.alreadyProcessed && (!c.isImported || !c.existsInDb))
         .map((c) => c.id)
     );
     const reasons = new Map();
     try {
-      const classified = await classifyCandidatesWithGemini(candidates);
+      const classified = await classifyCandidatesWithGemini(candidatesWithHints);
       if (classified.processIds.size > 0) processIds = classified.processIds;
       for (const [k, v] of classified.reasons.entries()) reasons.set(k, v);
     } catch (e) {
       console.warn('gmail candidate classification fallback:', e?.message || e);
     }
 
-    const enriched = candidates.map((c) => {
+    const enriched = candidatesWithHints.map((c) => {
       const shouldProcess = processIds.has(c.id) && !c.alreadyProcessed;
       return {
         ...c,

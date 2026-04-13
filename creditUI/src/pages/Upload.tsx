@@ -625,7 +625,38 @@ const Upload = () => {
                     </div>
                   </label>
                   {isSelected && !lockedAsDone && !classifierSkipped && (
-                    <div className="pl-7">
+                    <div className="pl-7 space-y-3">
+                      {c.encrypted !== false && (
+                        <>
+                          {c.passwordHint?.hasPasswordHint ? (
+                            <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-3 space-y-2 text-xs text-amber-950 shadow-sm">
+                              <div className="flex items-center gap-2 font-semibold">
+                                <IconLock size={14} className="text-amber-800 shrink-0" />
+                                <span>This PDF is password protected</span>
+                              </div>
+                              {c.passwordHint.userMessage ? (
+                                <p className="leading-relaxed font-medium">{c.passwordHint.userMessage}</p>
+                              ) : c.passwordHint.passwordRule ? (
+                                <p>
+                                  <span className="font-semibold">Hint:</span> {c.passwordHint.passwordRule}
+                                </p>
+                              ) : null}
+                              {c.passwordHint.example ? (
+                                <p className="text-amber-900/90">
+                                  <span className="font-semibold">Example:</span> {c.passwordHint.example}
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <p className="text-[11px] text-muted-foreground flex items-start gap-2">
+                              <IconLock size={14} className="shrink-0 mt-0.5" />
+                              <span>
+                                This PDF is password protected. We couldn&apos;t find a password hint in the email body — enter the password your bank uses (often DOB or name-based).
+                              </span>
+                            </p>
+                          )}
+                        </>
+                      )}
                       <div className="flex items-stretch gap-2">
                         <div className="relative flex-1 min-w-0">
                           <input

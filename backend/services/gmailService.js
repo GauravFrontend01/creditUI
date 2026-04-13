@@ -128,12 +128,79 @@ function defaultGmailQuery() {
   );
 }
 
+function stripHtml(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|tr|li|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Extract human-readable text from Gmail message payload (plain preferred, else HTML stripped).
+ */
+function extractEmailBodyPlainText(payload) {
+  if (!payload) return '';
+  const chunks = { plain: [], html: [] };
+
+  function walk(parts) {
+    if (!parts) return;
+    for (const p of parts) {
+      const mime = (p.mimeType || '').toLowerCase();
+      if (mime.startsWith('multipart/') && p.parts) {
+        walk(p.parts);
+        continue;
+      }
+      if (p.body?.data) {
+        const text = Buffer.from(p.body.data, 'base64url').toString('utf8');
+        if (mime === 'text/plain') chunks.plain.push(text);
+        if (mime === 'text/html') chunks.html.push(text);
+      }
+    }
+  }
+
+  if (payload.parts) walk(payload.parts);
+  if (payload.body?.data && !payload.parts) {
+    const mime = (payload.mimeType || '').toLowerCase();
+    const text = Buffer.from(payload.body.data, 'base64url').toString('utf8');
+    if (mime === 'text/plain') chunks.plain.push(text);
+    if (mime === 'text/html') chunks.html.push(text);
+  }
+
+  const plain = chunks.plain.join('\n').trim();
+  if (plain) return plain;
+  const htmlJoined = chunks.html.join('\n');
+  return stripHtml(htmlJoined);
+}
+
+/**
+ * @param {import('googleapis').gmail_v1.Gmail} gmail
+ * @param {string} messageId
+ */
+async function getMessageBodyText(gmail, messageId) {
+  const full = await gmail.users.messages.get({
+    userId: 'me',
+    id: messageId,
+    format: 'full',
+  });
+  return extractEmailBodyPlainText(full.data.payload) || '';
+}
+
 module.exports = {
   createOAuth2Client,
   buildGmailAuthUrl,
   exchangeCodeForTokens,
   collectPdfParts,
   extractPdfAttachments,
+  extractEmailBodyPlainText,
+  getMessageBodyText,
   defaultGmailQuery,
   isPdfEncrypted,
   google,
