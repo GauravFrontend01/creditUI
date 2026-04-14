@@ -76,11 +76,16 @@ function collectPdfParts(payload) {
  * @returns {Promise<{ buffer: Buffer, filename: string, subject: string, from: string }[]>}
  */
 async function extractPdfAttachments(gmail, messageId) {
+  const startedAt = Date.now();
+  console.log(`[Gmail API] messages.get(format=full) start messageId=${messageId}`);
   const full = await gmail.users.messages.get({
     userId: 'me',
     id: messageId,
     format: 'full',
   });
+  console.log(
+    `[Gmail API] messages.get(format=full) success messageId=${messageId} elapsedMs=${Date.now() - startedAt}`
+  );
 
   const headers = full.data.payload?.headers || [];
   const subject = (headers.find(h => h.name?.toLowerCase() === 'subject')?.value || '').trim();
@@ -90,18 +95,31 @@ async function extractPdfAttachments(gmail, messageId) {
   if (!payload) return [];
 
   const parts = collectPdfParts(payload);
+  console.log(
+    `[Gmail Parse] messageId=${messageId} subject="${subject.slice(0, 80)}" pdfParts=${parts.length}`
+  );
   const results = [];
 
   for (const part of parts) {
     let buf;
     if (part.body?.data) {
+      console.log(
+        `[Gmail Parse] messageId=${messageId} part="${part.filename || 'statement.pdf'}" source=inline`
+      );
       buf = Buffer.from(part.body.data, 'base64url');
     } else if (part.body?.attachmentId) {
+      const attStart = Date.now();
+      console.log(
+        `[Gmail API] attachments.get start messageId=${messageId} attachmentId=${part.body.attachmentId} filename="${part.filename || ''}"`
+      );
       const att = await gmail.users.messages.attachments.get({
         userId: 'me',
         messageId,
         id: part.body.attachmentId,
       });
+      console.log(
+        `[Gmail API] attachments.get success messageId=${messageId} attachmentId=${part.body.attachmentId} elapsedMs=${Date.now() - attStart}`
+      );
       if (att.data?.data) {
         buf = Buffer.from(att.data.data, 'base64url');
       }
@@ -110,10 +128,16 @@ async function extractPdfAttachments(gmail, messageId) {
       const filename = part.filename && part.filename.trim()
         ? part.filename.trim()
         : 'statement.pdf';
+      console.log(
+        `[Gmail Parse] messageId=${messageId} acceptedPdf filename="${filename}" bytes=${buf.length}`
+      );
       results.push({ buffer: buf, filename, subject, from });
     }
   }
 
+  console.log(
+    `[Gmail Parse] messageId=${messageId} extractedPdfs=${results.length} elapsedMs=${Date.now() - startedAt}`
+  );
   return results;
 }
 
@@ -185,12 +209,18 @@ function extractEmailBodyPlainText(payload) {
  * @param {string} messageId
  */
 async function getMessageBodyText(gmail, messageId) {
+  const startedAt = Date.now();
+  console.log(`[Gmail API] messages.get(format=full body) start messageId=${messageId}`);
   const full = await gmail.users.messages.get({
     userId: 'me',
     id: messageId,
     format: 'full',
   });
-  return extractEmailBodyPlainText(full.data.payload) || '';
+  const text = extractEmailBodyPlainText(full.data.payload) || '';
+  console.log(
+    `[Gmail Parse] messageId=${messageId} bodyTextChars=${text.length} elapsedMs=${Date.now() - startedAt}`
+  );
+  return text;
 }
 
 module.exports = {

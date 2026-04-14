@@ -347,22 +347,25 @@ const Upload = () => {
         return;
       }
 
-      for (const c of rows) {
-        const enc = treatEncrypted(c);
-        const pwd = String(candidatePasswords[c.id] ?? '').trim();
-        setPasswordGateStatus((prev) => ({ ...prev, [c.id]: 'checking' }));
-        try {
-          const file = await downloadGmailPdfAsFile(c);
-          const opens = await canOpenPdfWithPassword(file, pwd, enc);
-          gate[c.id] = opens ? 'ok' : 'bad';
-          setPasswordGateStatus((prev) => ({ ...prev, [c.id]: opens ? 'ok' : 'bad' }));
-        } catch {
-          gate[c.id] = 'bad';
-          setPasswordGateStatus((prev) => ({ ...prev, [c.id]: 'bad' }));
-        }
-      }
+      const gatePairs = await Promise.all(
+        rows.map(async (c) => {
+          const enc = treatEncrypted(c);
+          const pwd = String(candidatePasswords[c.id] ?? '').trim();
+          setPasswordGateStatus((prev) => ({ ...prev, [c.id]: 'checking' }));
+          try {
+            const file = await downloadGmailPdfAsFile(c);
+            const opens = await canOpenPdfWithPassword(file, pwd, enc);
+            const st: PwGateStatus = opens ? 'ok' : 'bad';
+            return [c.id, st] as const;
+          } catch {
+            return [c.id, 'bad' as PwGateStatus] as const;
+          }
+        })
+      );
+      const gateFromCheck = Object.fromEntries(gatePairs) as Record<string, PwGateStatus>;
+      setPasswordGateStatus((prev) => ({ ...prev, ...gateFromCheck }));
 
-      const allOk = rows.every((c) => gate[c.id] === 'ok');
+      const allOk = rows.every((c) => gateFromCheck[c.id] === 'ok');
       if (!allOk) {
         toast.error('Some passwords are wrong or the PDF could not be opened. Fix the rows in red, then try again.');
         return;
@@ -370,38 +373,49 @@ const Upload = () => {
 
       setGmailPipelineStep('uploading');
 
+      const uploadResults = await Promise.all(
+        rows.map(async (c) => {
+          const enc = treatEncrypted(c);
+          const pwd = String(candidatePasswords[c.id] ?? '').trim();
+          const effectivePassword = enc ? pwd : pwd || 'gaur2607';
+          try {
+            const file = await downloadGmailPdfAsFile(c);
+            const unlockedFile = await unlockPdfInBrowser(file, effectivePassword);
+
+            const formData = new FormData();
+            formData.append('pdf', unlockedFile);
+            formData.append('statementType', statementType);
+            formData.append('isUnlocked', 'true');
+            formData.append('gmailMessageId', c.messageId);
+            if (c.parsedPeriod?.from) formData.append('emailPeriodFrom', String(c.parsedPeriod.from));
+            if (c.parsedPeriod?.to) formData.append('emailPeriodTo', String(c.parsedPeriod.to));
+            if (c.accountHint) formData.append('emailAccountHint', String(c.accountHint));
+
+            const { data: created } = await api.post('/api/statements', formData, {
+              headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            if (created?.alreadyProcessed) {
+              return {
+                kind: 'dup' as const,
+                c,
+                existingId: String(created.existingStatementId || 'existing record'),
+              };
+            }
+            return { kind: 'ok' as const, c };
+          } catch (inner: unknown) {
+            const msg = await parseAxiosErrorMessage(inner);
+            return { kind: 'err' as const, c, msg };
+          }
+        })
+      );
+
       let ok = 0;
       const failures: string[] = [];
-
-      for (const c of rows) {
-        const enc = treatEncrypted(c);
-        const pwd = String(candidatePasswords[c.id] ?? '').trim();
-        const effectivePassword = enc ? pwd : pwd || 'gaur2607';
-        try {
-          const file = await downloadGmailPdfAsFile(c);
-          const unlockedFile = await unlockPdfInBrowser(file, effectivePassword);
-
-          const formData = new FormData();
-          formData.append('pdf', unlockedFile);
-          formData.append('statementType', statementType);
-          formData.append('isUnlocked', 'true');
-          formData.append('gmailMessageId', c.messageId);
-          if (c.parsedPeriod?.from) formData.append('emailPeriodFrom', String(c.parsedPeriod.from));
-          if (c.parsedPeriod?.to) formData.append('emailPeriodTo', String(c.parsedPeriod.to));
-          if (c.accountHint) formData.append('emailAccountHint', String(c.accountHint));
-
-          const { data: created } = await api.post('/api/statements', formData, {
-            headers: { 'Content-Type': 'multipart/form-data' },
-          });
-          if (created?.alreadyProcessed) {
-            failures.push(`${c.filename}: already processed (${created.existingStatementId || 'existing record'})`);
-          } else {
-            ok += 1;
-          }
-        } catch (inner: unknown) {
-          const msg = await parseAxiosErrorMessage(inner);
-          failures.push(`${c.filename}: ${msg}`);
-        }
+      for (const r of uploadResults) {
+        if (r.kind === 'ok') ok += 1;
+        else if (r.kind === 'dup') {
+          failures.push(`${r.c.filename}: already processed (${r.existingId})`);
+        } else failures.push(`${r.c.filename}: ${r.msg}`);
       }
 
       if (ok > 0) {

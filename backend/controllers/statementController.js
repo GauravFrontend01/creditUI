@@ -81,6 +81,7 @@ async function findDuplicateByGmailMetadata(userId, accountHint, fromDate, toDat
 // @route   POST /api/statements
 // @access  Private
 exports.createStatement = async (req, res) => {
+  const startedAt = Date.now();
   try {
     const pdfFile = req.file;
     const pdfPassword = String(req.body.pdfPassword || '').trim();
@@ -95,7 +96,14 @@ exports.createStatement = async (req, res) => {
     if (!pdfFile) return res.status(400).json({ message: 'No PDF file uploaded' });
     if (!isUnlocked && !pdfPassword) return res.status(400).json({ message: 'PDF password is required' });
 
+    console.log(
+      `[Sync/Create] start user=${req.user._id} file="${pdfFile.originalname}" size=${pdfFile.size || 0} unlocked=${isUnlocked} source=${gmailMessageId ? 'gmail' : 'manual'} messageId=${gmailMessageId || '-'}`
+    );
+
     if (gmailMessageId && emailPeriodFrom && emailPeriodTo && emailAccountHint) {
+      console.log(
+        `[Sync/Create] duplicate-check messageId=${gmailMessageId} accountHint=${emailAccountHint} period=${emailPeriodFrom}..${emailPeriodTo}`
+      );
       const dup = await findDuplicateByGmailMetadata(
         req.user._id,
         emailAccountHint,
@@ -103,6 +111,9 @@ exports.createStatement = async (req, res) => {
         emailPeriodTo
       );
       if (dup) {
+        console.log(
+          `[Sync/Create] duplicate-found existingStatementId=${dup._id} elapsedMs=${Date.now() - startedAt}`
+        );
         return res.status(200).json({
           alreadyProcessed: true,
           existingStatementId: dup._id,
@@ -111,6 +122,7 @@ exports.createStatement = async (req, res) => {
       }
     }
 
+    console.log('[Sync/Create] invoking processStatementPdf');
     const statement = await processStatementPdf({
       userId: req.user._id,
       pdfBuffer: pdfFile.buffer,
@@ -121,8 +133,15 @@ exports.createStatement = async (req, res) => {
       gmailMessageId,
     });
 
+    const txCount = Array.isArray(statement.transactions) ? statement.transactions.length : 0;
+    console.log(
+      `[Sync/Create] success statementId=${statement._id} tx=${txCount} elapsedMs=${Date.now() - startedAt}`
+    );
     res.status(201).json(statement);
   } catch (error) {
+    console.error(
+      `[Sync/Create] failed elapsedMs=${Date.now() - startedAt} error=${error?.message || error}`
+    );
     console.error('createStatement error:', error);
     res.status(500).json({ message: error.message || 'Server error' });
   }

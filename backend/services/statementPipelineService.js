@@ -413,7 +413,7 @@ async function extractTransactionsWithVertex(pdfStorageUrl) {
   };
 
   const response = await client.models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-2.5-pro',
     contents: [pdfFile, EXTRACTION_PROMPT],
     generationConfig: {
       temperature: 0,

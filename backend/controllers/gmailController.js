@@ -169,8 +169,8 @@ function readGeminiText(response) {
   return response?.candidates?.[0]?.content?.parts?.find((p) => typeof p?.text === 'string')?.text || '';
 }
 
-function buildClassificationPrompt(candidates) {
-  const compact = candidates.map((c) => ({
+function compactCandidateForClassification(c) {
+  return {
     id: c.id,
     subject: c.subject,
     from: c.from,
@@ -179,8 +179,11 @@ function buildClassificationPrompt(candidates) {
     encrypted: !!c.encrypted,
     savedPassword: !!(c.savedPassword && String(c.savedPassword).trim()),
     alreadyProcessed: !!c.alreadyProcessed,
-  }));
+  };
+}
 
+function buildClassificationPrompt(candidates) {
+  const compact = candidates.map((c) => compactCandidateForClassification(c));
   return `
 You are a financial document classifier for an Indian personal finance app.
 
@@ -219,62 +222,64 @@ Format:
 `.trim();
 }
 
-function buildPasswordHintPrompt(emailBody) {
-  const body = String(emailBody || '').trim().slice(0, 24000);
-  return `
-You are helping a user understand how to open their password-protected bank statement PDF.
+function buildPasswordHintsBatchPrompt(emails) {
+  const payload = emails.map(e => ({
+    messageId: e.messageId,
+    body: String(e.text || '').trim().slice(0, 15000)
+  }));
 
-Look at this email body and extract:
+  return `
+You are helping a user understand how to open their password-protected bank statement PDFs.
+
+You will be given a JSON array of emails below. Each email has a "messageId" and the "body" text.
+For EACH email, look for instructions on how to construct a PDF password.
+
+Extract:
 1. How the password is constructed (the rule/formula)
 2. An example if given
 3. A short plain-English instruction for the user
 
-Email body:
-${body}
+Respond with ONLY a valid JSON array of objects. Each object MUST include the "messageId".
+Format:
+[
+  {
+    "messageId": "msg-id-1",
+    "hasPasswordHint": true,
+    "passwordRule": "Date of birth in DDMMYYYY format",
+    "example": "If DOB is 15/07/1998, password is 15071998",
+    "userMessage": "Your PDF password is your date of birth in DDMMYYYY format (e.g. 15071998)"
+  },
+  {
+    "messageId": "msg-id-2",
+    "hasPasswordHint": false,
+    "passwordRule": null,
+    "example": null,
+    "userMessage": null
+  }
+]
 
-Respond with ONLY valid JSON:
-{
-  "hasPasswordHint": true,
-  "passwordRule": "Date of birth in DDMMYYYY format",
-  "example": "If DOB is 15/07/1998, password is 15071998",
-  "userMessage": "Your PDF password is your date of birth in DDMMYYYY format (e.g. 15071998)"
-}
-
-If no password hint is found, respond:
-{
-  "hasPasswordHint": false,
-  "passwordRule": null,
-  "example": null,
-  "userMessage": null
-}
+Emails to process:
+${JSON.stringify(payload, null, 2)}
 `.trim();
 }
 
-async function extractPasswordHintWithGemini(emailBody) {
-  const trimmed = String(emailBody || '').trim();
-  if (!trimmed) {
-    return { hasPasswordHint: false, passwordRule: null, example: null, userMessage: null };
-  }
+async function extractPasswordHintsBatchWithGemini(emailsBatch) {
+  if (!emailsBatch || emailsBatch.length === 0) return [];
 
   const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_PROJECT_ID || '';
   const location = process.env.GOOGLE_CLOUD_LOCATION || process.env.GOOGLE_LOCATION || 'us-central1';
   if (!project) throw new Error('Missing GOOGLE_PROJECT_ID for password hint extraction');
 
   const client = new GoogleGenAI({ vertexai: true, project, location });
-  const prompt = buildPasswordHintPrompt(trimmed);
+  const prompt = buildPasswordHintsBatchPrompt(emailsBatch);
   const response = await client.models.generateContent({
     model: 'gemini-2.5-flash',
     contents: [prompt],
     generationConfig: { temperature: 0, responseMimeType: 'application/json' },
   });
   const raw = normalizeGeminiJson(readGeminiText(response));
-  const parsed = JSON.parse(raw || '{}');
-  return {
-    hasPasswordHint: !!parsed.hasPasswordHint,
-    passwordRule: parsed.passwordRule ?? null,
-    example: parsed.example ?? null,
-    userMessage: parsed.userMessage ?? null,
-  };
+  const parsed = JSON.parse(raw || '[]');
+  return Array.isArray(parsed) ? parsed : [];
 }
 
 async function classifyCandidatesWithGemini(candidates) {
@@ -444,6 +449,7 @@ exports.disconnectGmail = async (req, res) => {
 // @route   GET /api/gmail/candidates
 // @access  Private
 exports.listGmailCandidates = async (req, res) => {
+  const startedAt = Date.now();
   try {
     const user = await User.findById(req.user._id).select('+gmailRefreshToken');
     if (!user?.gmailRefreshToken) {
@@ -460,9 +466,15 @@ exports.listGmailCandidates = async (req, res) => {
 
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     const q = defaultGmailQuery();
+    console.log(
+      `[Gmail Candidates] start user=${req.user._id} query="${q}" maxResults=${maxResults}`
+    );
     const listRes = await gmail.users.messages.list({ userId: 'me', q, maxResults });
 
     const messageRefs = listRes.data.messages || [];
+    console.log(
+      `[Gmail API] messages.list returned count=${messageRefs.length} nextPageToken=${listRes.data.nextPageToken ? 'yes' : 'no'}`
+    );
     const imported = new Set(user.gmailImportedMessageIds || []);
     const existingStatements = await Statement.find({
       user: user._id,
@@ -477,15 +489,27 @@ exports.listGmailCandidates = async (req, res) => {
       const isImported = imported.has(messageId);
       
       try {
+        const metaStart = Date.now();
+        console.log(`[Gmail API] messages.get(format=metadata) start messageId=${messageId}`);
         const full = await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'metadata' });
+        console.log(
+          `[Gmail API] messages.get(format=metadata) success messageId=${messageId} elapsedMs=${Date.now() - metaStart}`
+        );
         const headers = full.data.payload?.headers || [];
         const subject = (headers.find(h => h.name?.toLowerCase() === 'subject')?.value || '').trim();
         const from = (headers.find(h => h.name?.toLowerCase() === 'from')?.value || '').trim();
         const date = (headers.find(h => h.name?.toLowerCase() === 'date')?.value || '');
         const snippet = String(full.data.snippet || '');
+        console.log(
+          `[Gmail Parse] metadata messageId=${messageId} subject="${subject.slice(0, 80)}" from="${from.slice(0, 60)}" snippetChars=${snippet.length}`
+        );
 
         const pdfs = await extractPdfAttachments(gmail, messageId);
-        if (pdfs.length === 0) continue;
+        if (pdfs.length === 0) {
+          console.log(`[Gmail Parse] messageId=${messageId} skipped reason=no_pdf_attachment`);
+          continue;
+        }
+        console.log(`[Gmail Parse] messageId=${messageId} pdfCount=${pdfs.length}`);
 
         for (const pdf of pdfs) {
           const bank = identifyBank(subject, from);
@@ -503,6 +527,9 @@ exports.listGmailCandidates = async (req, res) => {
             const match = user.bankPasswords.find(p => p.label === bank);
             if (match) savedPassword = match.password;
           }
+          console.log(
+            `[Gmail Transform] messageId=${messageId} file="${pdf.filename}" bytes=${pdf.buffer.length} bank=${bank} encrypted=${encrypted} accountHint=${accountHint || '-'} period=${dateRange ? `${dateRange.from}..${dateRange.to}` : '-'} alreadyProcessed=${alreadyProcessed}`
+          );
 
           candidates.push({
             messageId,
@@ -529,22 +556,61 @@ exports.listGmailCandidates = async (req, res) => {
         console.error('Candidate fetch fail', messageId, e);
       }
     }
+    console.log(`[Gmail Candidates] built candidates=${candidates.length}`);
 
     const hintByMessage = new Map();
     const encryptedMessageIds = [...new Set(candidates.filter((c) => c.encrypted).map((c) => c.messageId))];
-    for (const mid of encryptedMessageIds) {
-      try {
-        const bodyText = await getMessageBodyText(gmail, mid);
-        const hint = await extractPasswordHintWithGemini(bodyText);
-        hintByMessage.set(mid, hint);
-      } catch (e) {
-        console.warn('password hint extraction failed', mid, e?.message || e);
-        hintByMessage.set(mid, {
-          hasPasswordHint: false,
-          passwordRule: null,
-          example: null,
-          userMessage: null,
-        });
+    console.log(
+      `[Gmail Candidates] encrypted messageIds needing body parse=${encryptedMessageIds.length}`
+    );
+    const fetchedEmails = await Promise.all(
+      encryptedMessageIds.map(async (mid) => {
+        try {
+          const text = await getMessageBodyText(gmail, mid);
+          return { messageId: mid, text };
+        } catch (e) {
+          console.warn('Failed to fetch email body for password hint', mid, e?.message);
+          return { messageId: mid, text: '' };
+        }
+      })
+    );
+
+    const BATCH_SIZE = 20;
+    for (let i = 0; i < fetchedEmails.length; i += BATCH_SIZE) {
+      const batch = fetchedEmails.slice(i, i + BATCH_SIZE);
+      const validBatch = batch.filter(e => e.text.trim());
+      
+      batch.forEach(e => {
+        if (!e.text.trim()) {
+           hintByMessage.set(e.messageId, { hasPasswordHint: false, passwordRule: null, example: null, userMessage: null });
+        }
+      });
+
+      if (validBatch.length > 0) {
+        console.log(`[Gmail Transform] Sending batch of ${validBatch.length} bodies to Gemini for password hints`);
+        try {
+          const results = await extractPasswordHintsBatchWithGemini(validBatch);
+          for (const res of results) {
+            if (res.messageId) {
+               hintByMessage.set(res.messageId, {
+                 hasPasswordHint: !!res.hasPasswordHint,
+                 passwordRule: res.passwordRule ?? null,
+                 example: res.example ?? null,
+                 userMessage: res.userMessage ?? null,
+               });
+            }
+          }
+          for (const e of validBatch) {
+             if (!hintByMessage.has(e.messageId)) {
+                hintByMessage.set(e.messageId, { hasPasswordHint: false, passwordRule: null, example: null, userMessage: null });
+             }
+          }
+        } catch (e) {
+          console.warn('Batch password hint extraction failed', e?.message || e);
+          for (const e of validBatch) {
+             hintByMessage.set(e.messageId, { hasPasswordHint: false, passwordRule: null, example: null, userMessage: null });
+          }
+        }
       }
     }
 
@@ -559,10 +625,16 @@ exports.listGmailCandidates = async (req, res) => {
         .map((c) => c.id)
     );
     const reasons = new Map();
+    console.log(
+      `[Gmail Candidates] classification input=${candidatesWithHints.length} defaultProcess=${processIds.size}`
+    );
     try {
       const classified = await classifyCandidatesWithGemini(candidatesWithHints);
       if (classified.processIds.size > 0) processIds = classified.processIds;
       for (const [k, v] of classified.reasons.entries()) reasons.set(k, v);
+      console.log(
+        `[Gmail Candidates] classification result process=${classified.processIds.size} reasons=${classified.reasons.size}`
+      );
     } catch (e) {
       console.warn('gmail candidate classification fallback:', e?.message || e);
     }
@@ -576,6 +648,9 @@ exports.listGmailCandidates = async (req, res) => {
       };
     });
 
+    console.log(
+      `[Gmail Candidates] response candidates=${enriched.length} elapsedMs=${Date.now() - startedAt}`
+    );
     res.json({ candidates: enriched });
   } catch (error) {
     console.error('listGmailCandidates', error);
@@ -586,11 +661,15 @@ exports.listGmailCandidates = async (req, res) => {
 // @route   POST /api/gmail/sync-selected
 // @access  Private
 exports.syncGmailSelected = async (req, res) => {
+  const startedAt = Date.now();
   try {
     const { selections } = req.body; // Array<{ messageId, filename, password, statementType }>
     if (!selections || !Array.isArray(selections)) {
       return res.status(400).json({ message: 'No selections provided' });
     }
+    console.log(
+      `[Gmail SyncSelected] start user=${req.user._id} selections=${selections.length}`
+    );
 
     const user = await User.findById(req.user._id).select('+gmailRefreshToken');
     if (!user?.gmailRefreshToken) return res.status(400).json({ message: 'Connect Gmail first' });
@@ -607,11 +686,19 @@ exports.syncGmailSelected = async (req, res) => {
     const created = [];
     const errors = [];
 
-    for (const sel of selections) {
+    for (let index = 0; index < selections.length; index += 1) {
+      const sel = selections[index];
+      const selStart = Date.now();
       try {
         const { messageId, filename, password, statementType = 'CREDIT_CARD' } = sel;
+        console.log(
+          `[Gmail SyncSelected] [${index + 1}/${selections.length}] begin file="${filename}" messageId=${messageId} type=${statementType}`
+        );
         if (!password || !String(password).trim()) {
           errors.push({ filename, error: 'Password is required for Gmail imports' });
+          console.warn(
+            `[Gmail SyncSelected] [${index + 1}/${selections.length}] missing password file="${filename}"`
+          );
           continue;
         }
 
@@ -620,6 +707,9 @@ exports.syncGmailSelected = async (req, res) => {
 
         if (!match) {
           errors.push({ filename, error: 'Attachment not found' });
+          console.warn(
+            `[Gmail SyncSelected] [${index + 1}/${selections.length}] attachment not found file="${filename}"`
+          );
           continue;
         }
 
@@ -640,6 +730,9 @@ exports.syncGmailSelected = async (req, res) => {
           )
         ) {
           errors.push({ filename, error: 'already_processed' });
+          console.log(
+            `[Gmail SyncSelected] [${index + 1}/${selections.length}] duplicate skipped file="${filename}"`
+          );
           continue;
         }
 
@@ -665,8 +758,14 @@ exports.syncGmailSelected = async (req, res) => {
 
         created.push({ statementId: statement._id, filename, bank: bankLabel });
         imported.add(messageId);
+        console.log(
+          `[Gmail SyncSelected] [${index + 1}/${selections.length}] done file="${filename}" statementId=${statement._id} elapsedMs=${Date.now() - selStart}`
+        );
       } catch (err) {
         errors.push({ filename: sel.filename, error: err.message });
+        console.error(
+          `[Gmail SyncSelected] [${index + 1}/${selections.length}] failed file="${sel.filename}" elapsedMs=${Date.now() - selStart} error=${err?.message || err}`
+        );
       }
     }
 
@@ -676,6 +775,9 @@ exports.syncGmailSelected = async (req, res) => {
     if (oauth2Client.credentials.expiry_date) user.gmailTokenExpiry = new Date(oauth2Client.credentials.expiry_date);
 
     await user.save();
+    console.log(
+      `[Gmail SyncSelected] completed created=${created.length} errors=${errors.length} elapsedMs=${Date.now() - startedAt}`
+    );
     res.json({ created, errors });
   } catch (error) {
     console.error('syncGmailSelected', error);
@@ -686,12 +788,16 @@ exports.syncGmailSelected = async (req, res) => {
 // @route   GET /api/gmail/attachment?messageId=&filename=
 // @access  Private — raw PDF bytes for browser-side unlock (same flow as manual upload)
 exports.downloadGmailAttachment = async (req, res) => {
+  const startedAt = Date.now();
   try {
     const messageId = String(req.query.messageId || '').trim();
     const filename = String(req.query.filename || '').trim();
     if (!messageId || !filename) {
       return res.status(400).json({ message: 'messageId and filename are required' });
     }
+    console.log(
+      `[Gmail Attachment] start user=${req.user._id} messageId=${messageId} filename="${filename}"`
+    );
 
     const user = await User.findById(req.user._id).select('+gmailRefreshToken');
     if (!user?.gmailRefreshToken) {
@@ -709,6 +815,9 @@ exports.downloadGmailAttachment = async (req, res) => {
     const pdfs = await extractPdfAttachments(gmail, messageId);
     const match = pdfs.find((p) => p.filename === filename) || pdfs[0];
     if (!match || !match.buffer?.length) {
+      console.warn(
+        `[Gmail Attachment] not found messageId=${messageId} filename="${filename}" elapsedMs=${Date.now() - startedAt}`
+      );
       return res.status(404).json({ message: 'PDF attachment not found' });
     }
 
@@ -718,6 +827,9 @@ exports.downloadGmailAttachment = async (req, res) => {
     }
     await user.save();
 
+    console.log(
+      `[Gmail Attachment] success messageId=${messageId} filename="${match.filename}" size=${match.buffer.length} elapsedMs=${Date.now() - startedAt}`
+    );
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(match.filename)}`);
     return res.send(match.buffer);
