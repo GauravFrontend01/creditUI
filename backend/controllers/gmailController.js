@@ -169,122 +169,63 @@ function readGeminiText(response) {
   return response?.candidates?.[0]?.content?.parts?.find((p) => typeof p?.text === 'string')?.text || '';
 }
 
-function compactCandidateForClassification(c) {
-  return {
+function buildUnifiedClassificationPrompt(candidatesWithBodies) {
+  const payload = candidatesWithBodies.map((c) => ({
     id: c.id,
     subject: c.subject,
     from: c.from,
     filename: c.filename,
-    bank: c.bank,
     encrypted: !!c.encrypted,
-    savedPassword: !!(c.savedPassword && String(c.savedPassword).trim()),
     alreadyProcessed: !!c.alreadyProcessed,
-  };
-}
-
-function buildClassificationPrompt(candidates) {
-  const compact = candidates.map((c) => compactCandidateForClassification(c));
-  return `
-You are a financial document classifier for an Indian personal finance app.
-
-Your job is to look at email attachments and decide which ones are bank account statements or credit card statements that contain transaction history and should be processed.
-
-INCLUDE:
-- Bank savings account statements
-- Bank current account statements
-- Credit card statements
-- Prepaid card statements
-
-EXCLUDE:
-- Equity/securities statements (Zerodha, Groww, NSDL CDSL etc)
-- Demat account statements
-- Mutual fund statements
-- Trading account statements
-- Contract notes
-- Insurance documents
-- Wallet transaction reports (Paytm wallet etc)
-- Anything not a bank/credit card statement
-
-Candidates:
-${JSON.stringify(compact, null, 2)}
-
-Rules:
-- If duplicate statement appears multiple times, include only one. Prefer encrypted=true with savedPassword=true.
-- If unsure, skip.
-- If alreadyProcessed=true, skip it.
-- Respond ONLY valid JSON.
-
-Format:
-{
-  "process": [{ "id": "candidate-id", "reason": "..." }],
-  "skip": [{ "id": "candidate-id", "reason": "..." }]
-}
-`.trim();
-}
-
-function buildPasswordHintsBatchPrompt(emails) {
-  const payload = emails.map(e => ({
-    messageId: e.messageId,
-    body: String(e.text || '').trim().slice(0, 15000)
+    emailBody: c.encrypted ? String(c.bodyText || '').trim().slice(0, 15000) : undefined
   }));
 
   return `
-You are helping a user understand how to open their password-protected bank statement PDFs.
+You are a financial document classifier for an Indian personal finance app.
 
-You will be given a JSON array of emails below. Each email has a "messageId" and the "body" text.
-For EACH email, look for instructions on how to construct a PDF password.
+Task: You will be given a JSON array of email attachment candidates. Each has an "id", "subject", "from", "filename", "encrypted" boolean, and optionally an "emailBody".
 
-Extract:
-1. How the password is constructed (the rule/formula)
-2. An example if given
-3. A short plain-English instruction for the user
+Part 1: Classification
+Decide which attachments are bank account or credit card statements that contain transaction history.
+INCLUDE: Bank savings, current, credit card, prepaid card statements.
+EXCLUDE: Equity/securities, Demat, mutual funds, trading, contract notes, insurance, wallets.
+- If alreadyProcessed=true, you MUST classify it as "skip".
+- If unsure, "skip".
 
-Respond with ONLY a valid JSON array of objects. Each object MUST include the "messageId".
-Format:
-[
-  {
-    "messageId": "msg-id-1",
-    "hasPasswordHint": true,
-    "passwordRule": "Date of birth in DDMMYYYY format",
-    "example": "If DOB is 15/07/1998, password is 15071998",
-    "userMessage": "Your PDF password is your date of birth in DDMMYYYY format (e.g. 15071998)"
-  },
-  {
-    "messageId": "msg-id-2",
-    "hasPasswordHint": false,
-    "passwordRule": null,
-    "example": null,
-    "userMessage": null
-  }
-]
+Part 2: Password Hint Extraction (Only for encrypted=true)
+If an attachment is "encrypted": true, look at its "emailBody" to extract how to construct the PDF password.
 
-Emails to process:
+Respond ONLY with a valid JSON object matching this exact format:
+{
+  "results": [
+    {
+      "id": "candidate-id-1",
+      "action": "process",
+      "reason": "Credit card statement",
+      "passwordHint": {
+        "hasPasswordHint": true,
+        "passwordRule": "Date of birth in DDMMYYYY format",
+        "example": "If DOB is 15/07/1998, password is 15071998",
+        "userMessage": "Your password is your date of birth in DDMMYYYY format"
+      }
+    },
+    {
+       "id": "candidate-id-2",
+       "action": "skip",
+       "reason": "Mutual fund statement",
+       "passwordHint": null
+    }
+  ]
+}
+
+Candidates:
 ${JSON.stringify(payload, null, 2)}
 `.trim();
 }
 
-async function extractPasswordHintsBatchWithGemini(emailsBatch) {
-  if (!emailsBatch || emailsBatch.length === 0) return [];
-
-  const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_PROJECT_ID || '';
-  const location = process.env.GOOGLE_CLOUD_LOCATION || process.env.GOOGLE_LOCATION || 'us-central1';
-  if (!project) throw new Error('Missing GOOGLE_PROJECT_ID for password hint extraction');
-
-  const client = new GoogleGenAI({ vertexai: true, project, location });
-  const prompt = buildPasswordHintsBatchPrompt(emailsBatch);
-  const response = await client.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: [prompt],
-    generationConfig: { temperature: 0, responseMimeType: 'application/json' },
-  });
-  const raw = normalizeGeminiJson(readGeminiText(response));
-  const parsed = JSON.parse(raw || '[]');
-  return Array.isArray(parsed) ? parsed : [];
-}
-
-async function classifyCandidatesWithGemini(candidates) {
-  if (!Array.isArray(candidates) || candidates.length === 0) {
-    return { processIds: new Set(), reasons: new Map() };
+async function classifyAndExtractHintsUnifiedWithGemini(candidatesWithBodies) {
+  if (!candidatesWithBodies || candidatesWithBodies.length === 0) {
+    return { results: [] };
   }
 
   const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_PROJECT_ID || '';
@@ -292,22 +233,16 @@ async function classifyCandidatesWithGemini(candidates) {
   if (!project) throw new Error('Missing GOOGLE_PROJECT_ID for Gmail classification');
 
   const client = new GoogleGenAI({ vertexai: true, project, location });
-  const prompt = buildClassificationPrompt(candidates);
+  const prompt = buildUnifiedClassificationPrompt(candidatesWithBodies);
   const response = await client.models.generateContent({
     model: 'gemini-2.5-flash',
     contents: [prompt],
     generationConfig: { temperature: 0, responseMimeType: 'application/json' },
   });
   const raw = normalizeGeminiJson(readGeminiText(response));
-  const parsed = JSON.parse(raw || '{}');
-  const processIds = new Set((parsed.process || []).map((x) => String(x.id || '')));
-  const reasons = new Map();
-  for (const row of parsed.process || []) reasons.set(String(row.id || ''), String(row.reason || 'Relevant statement'));
-  for (const row of parsed.skip || []) {
-    const id = String(row.id || '');
-    if (!reasons.has(id)) reasons.set(id, String(row.reason || 'Skipped by classifier'));
-  }
-  return { processIds, reasons };
+  const parsed = JSON.parse(raw || '{"results": []}');
+  
+  return parsed;
 }
 
 const FRONTEND = () => (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
@@ -558,91 +493,60 @@ exports.listGmailCandidates = async (req, res) => {
     }
     console.log(`[Gmail Candidates] built candidates=${candidates.length}`);
 
-    const hintByMessage = new Map();
     const encryptedMessageIds = [...new Set(candidates.filter((c) => c.encrypted).map((c) => c.messageId))];
-    console.log(
-      `[Gmail Candidates] encrypted messageIds needing body parse=${encryptedMessageIds.length}`
-    );
-    const fetchedEmails = await Promise.all(
-      encryptedMessageIds.map(async (mid) => {
-        try {
-          const text = await getMessageBodyText(gmail, mid);
-          return { messageId: mid, text };
-        } catch (e) {
-          console.warn('Failed to fetch email body for password hint', mid, e?.message);
-          return { messageId: mid, text: '' };
-        }
-      })
-    );
-
-    const BATCH_SIZE = 20;
-    for (let i = 0; i < fetchedEmails.length; i += BATCH_SIZE) {
-      const batch = fetchedEmails.slice(i, i + BATCH_SIZE);
-      const validBatch = batch.filter(e => e.text.trim());
-      
-      batch.forEach(e => {
-        if (!e.text.trim()) {
-           hintByMessage.set(e.messageId, { hasPasswordHint: false, passwordRule: null, example: null, userMessage: null });
-        }
-      });
-
-      if (validBatch.length > 0) {
-        console.log(`[Gmail Transform] Sending batch of ${validBatch.length} bodies to Gemini for password hints`);
-        try {
-          const results = await extractPasswordHintsBatchWithGemini(validBatch);
-          for (const res of results) {
-            if (res.messageId) {
-               hintByMessage.set(res.messageId, {
-                 hasPasswordHint: !!res.hasPasswordHint,
-                 passwordRule: res.passwordRule ?? null,
-                 example: res.example ?? null,
-                 userMessage: res.userMessage ?? null,
-               });
-            }
-          }
-          for (const e of validBatch) {
-             if (!hintByMessage.has(e.messageId)) {
-                hintByMessage.set(e.messageId, { hasPasswordHint: false, passwordRule: null, example: null, userMessage: null });
-             }
-          }
-        } catch (e) {
-          console.warn('Batch password hint extraction failed', e?.message || e);
-          for (const e of validBatch) {
-             hintByMessage.set(e.messageId, { hasPasswordHint: false, passwordRule: null, example: null, userMessage: null });
-          }
-        }
-      }
+    const bodyTextsMap = new Map();
+    
+    if (encryptedMessageIds.length > 0) {
+       console.log(`[Gmail Candidates] fetching body text for ${encryptedMessageIds.length} encrypted emails`);
+       await Promise.all(
+         encryptedMessageIds.map(async (mid) => {
+           try {
+             const text = await getMessageBodyText(gmail, mid);
+             bodyTextsMap.set(mid, text);
+           } catch (e) {
+             console.warn('Failed to fetch email body for password hint', mid, e?.message);
+             bodyTextsMap.set(mid, '');
+           }
+         })
+       );
     }
 
-    const candidatesWithHints = candidates.map((c) => ({
+    const candidatesWithBodies = candidates.map(c => ({
       ...c,
-      passwordHint: c.encrypted ? hintByMessage.get(c.messageId) || null : null,
+      bodyText: c.encrypted ? bodyTextsMap.get(c.messageId) || '' : ''
     }));
 
     let processIds = new Set(
-      candidatesWithHints
-        .filter((c) => !c.alreadyProcessed && (!c.isImported || !c.existsInDb))
-        .map((c) => c.id)
+      candidates.filter((c) => !c.alreadyProcessed && (!c.isImported || !c.existsInDb)).map((c) => c.id)
     );
     const reasons = new Map();
-    console.log(
-      `[Gmail Candidates] classification input=${candidatesWithHints.length} defaultProcess=${processIds.size}`
-    );
-    try {
-      const classified = await classifyCandidatesWithGemini(candidatesWithHints);
-      if (classified.processIds.size > 0) processIds = classified.processIds;
-      for (const [k, v] of classified.reasons.entries()) reasons.set(k, v);
-      console.log(
-        `[Gmail Candidates] classification result process=${classified.processIds.size} reasons=${classified.reasons.size}`
-      );
-    } catch (e) {
-      console.warn('gmail candidate classification fallback:', e?.message || e);
+    const hints = new Map();
+
+    console.log(`[Gmail Transform] Sending ${candidatesWithBodies.length} candidates to Gemini for unified classification & hints`);
+    
+    const BATCH_SIZE = 20;
+    for (let i = 0; i < candidatesWithBodies.length; i += BATCH_SIZE) {
+       const batch = candidatesWithBodies.slice(i, i + BATCH_SIZE);
+       try {
+          const result = await classifyAndExtractHintsUnifiedWithGemini(batch);
+          for (const row of result.results || []) {
+             if (row.action === 'process') processIds.add(row.id);
+             else processIds.delete(row.id);
+             reasons.set(row.id, row.reason || (row.action === 'process' ? 'Relevant' : 'Skipped'));
+             if (row.passwordHint) {
+                hints.set(row.id, row.passwordHint);
+             }
+          }
+       } catch(e) {
+          console.warn('Unified Gemini call failed for batch', e?.message || e);
+       }
     }
 
-    const enriched = candidatesWithHints.map((c) => {
+    const enriched = candidates.map((c) => {
       const shouldProcess = processIds.has(c.id) && !c.alreadyProcessed;
       return {
         ...c,
+        passwordHint: c.encrypted ? (hints.get(c.id) || null) : null,
         shouldProcess,
         classificationReason: reasons.get(c.id) || (shouldProcess ? 'Relevant statement' : 'Skipped by classifier'),
       };
