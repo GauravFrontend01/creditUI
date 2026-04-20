@@ -449,6 +449,8 @@ function Statement() {
   const [isPreview, setIsPreview] = useState(false)
   const [, setPreviewData] = useState<any>(null)
   const [sendingToAI, setSendingToAI] = useState(false)
+  const [reviewQueue, setReviewQueue] = useState<string[]>([])
+  const [currentIndex, setCurrentIndex] = useState(-1)
 
   const { id } = useParams()
   const navigate = useNavigate()
@@ -512,7 +514,7 @@ function Statement() {
             setTab('raw_ocr')
           }
 
-          if (data.pdfStorageUrl && pages.length === 0) loadPdfFromUrl(data.pdfStorageUrl, data.pdfPassword)
+          if (data.pdfStorageUrl) loadPdfFromUrl(data.pdfStorageUrl, data.pdfPassword)
         } catch (e: any) {
           if (e.response?.status === 401) navigate('/login')
           else navigate('/statements')
@@ -541,6 +543,28 @@ function Statement() {
     }
     load()
   }, [id])
+
+  useEffect(() => {
+    const fetchQueue = async () => {
+      try {
+        const { data: list } = await api.get('/api/statements')
+        const reviewPending = (list as any[])
+          .filter((st: any) => !st.isApproved && st.status === 'COMPLETED')
+          .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+          .map((st: any) => st._id)
+        setReviewQueue(reviewPending)
+      } catch (e) {
+        console.error("Failed to fetch review queue", e)
+      }
+    }
+    fetchQueue()
+  }, [])
+
+  useEffect(() => {
+    if (reviewQueue.length && id) {
+      setCurrentIndex(reviewQueue.indexOf(id))
+    }
+  }, [reviewQueue, id])
 
   useEffect(() => {
     if (!id || id === 'preview') return
@@ -1280,88 +1304,134 @@ function Statement() {
           </div>
         )}
 
-        {/* Stat bar */}
-        <div className="shrink-0 px-6 py-4 border-b bg-white">
-          <div className="flex items-start justify-between gap-6 flex-wrap">
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-3">
-                <h2 className="text-lg font-black text-slate-900 tracking-tight">
-                  {typeof data.bankName === 'object' ? data.bankName?.val : data.bankName}
-                </h2>
-                <span className="text-[9px] font-black uppercase tracking-[0.15em] bg-primary/5 text-primary px-2 py-0.5 rounded border border-primary/10">
-                  {data.ocrEngine === 'ocr_space' ? 'OCR.space v1' :
-                    data.ocrEngine === 'ocr_space_v1' ? 'OCR.space v1' :
-                      data.ocrEngine === 'ocr_space_v2' ? 'OCR.space v2' :
-                        data.ocrEngine === 'ocr_space_v3' ? 'OCR.space v3' : 'Gemini Native'}
+        {/* Stat bar: Optimized Dual-Row Dashboard Layout */}
+        <div className="shrink-0 px-6 py-4 border-b bg-white space-y-4 shadow-sm relative z-20 font-sans">
+          
+          {/* TOP ROW: Context & Metrics */}
+          <div className="flex items-center justify-between gap-6">
+            <div className="flex flex-col">
+              <h2 className="text-xl font-bold text-slate-900 tracking-tight leading-tight">
+                {typeof data.bankName === 'object' ? data.bankName?.val : data.bankName}
+              </h2>
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">
+                   {data.statementDate?.val ? `Statement: ${data.statementDate.val}` : 'Period Unspecified'}
                 </span>
+                {data.paymentDueDate?.val && (
+                  <>
+                    <div className="h-1 w-1 rounded-full bg-slate-300" />
+                    <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">
+                       Due: {data.paymentDueDate.val}
+                    </span>
+                  </>
+                )}
               </div>
-              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-                {data.statementDate?.val && `Statement: ${data.statementDate.val}`}
-                {data.paymentDueDate?.val && ` · Due: ${data.paymentDueDate.val}`}
-              </p>
             </div>
-            <div className="flex items-center gap-8 flex-wrap">
+
+            {/* Concise Review Queue Navigation */}
+            {isSavedView && reviewQueue.length > 0 && (
+              <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl border border-slate-200/60">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={currentIndex <= 0}
+                  onClick={() => navigate(`/statements/${reviewQueue[currentIndex - 1]}`)}
+                  className="h-9 w-9 rounded-lg hover:bg-white hover:text-primary transition-all disabled:opacity-30"
+                >
+                  <IconArrowLeft size={16} />
+                </Button>
+                <div className="px-3 text-center min-w-[80px]">
+                  <p className="text-[10px] font-bold text-slate-700 tabular-nums">
+                    {currentIndex !== -1 ? currentIndex + 1 : '?'} <span className="text-slate-400 font-medium mx-0.5">/</span> {reviewQueue.length}
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={currentIndex === -1 || currentIndex >= reviewQueue.length - 1}
+                  onClick={() => navigate(`/statements/${reviewQueue[currentIndex + 1]}`)}
+                  className="h-9 w-9 rounded-lg hover:bg-white hover:text-primary transition-all disabled:opacity-30"
+                >
+                  <IconArrowRight size={16} />
+                </Button>
+              </div>
+            )}
+
+            <div className="flex items-center gap-8">
               {!isBank ? (
                 <>
-                  <MetricCard label="Credit Limit" value={fmt(data.creditLimit?.val, sym)} />
+                  <MetricCard label="Limit" value={fmt(data.creditLimit?.val, sym)} small />
                   <MetricCard
                     label="Outstanding"
                     value={fmt(data.outstandingTotal?.val, sym)}
                     color={utilPct >= 80 ? 'text-red-600' : 'text-slate-900'}
-                    sub={`${utilPct}% utilized`}
+                    small
                   />
-                  <MetricCard label="Min Due" value={fmt(data.minPaymentDue?.val, sym)} color="text-amber-600" sub={data.paymentDueDate?.val} />
+                  <MetricCard label="Min Due" value={fmt(data.minPaymentDue?.val, sym)} color="text-amber-600" small />
                 </>
               ) : (
                 <>
-                  <MetricCard label="Opening Balance" value={fmt(data.openingBalance?.val, sym)} />
-                  <MetricCard
-                    label="Closing Balance"
-                    value={fmt(data.closingBalance?.val, sym)}
-                    color="text-emerald-600"
-                  />
+                  <MetricCard label="Opening" value={fmt(data.openingBalance?.val, sym)} small />
+                  <MetricCard label="Closing" value={fmt(data.closingBalance?.val, sym)} color="text-emerald-600" small />
                   <MetricCard label="A/C Number" value={data.accountNumber?.val || '—'} small />
                 </>
               )}
             </div>
-            <div className="flex items-center gap-4">
+          </div>
+
+          <div className="h-px bg-slate-100" />
+
+          {/* BOTTOM ROW: Action Console */}
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2">
               {isSavedView && !data.isApproved && data.status === 'COMPLETED' && (
-                <div className="flex gap-2 flex-wrap">
+                <>
                   <Button
                     onClick={confirmApproval}
-                    className="rounded-xl px-6 h-11 gap-2 bg-emerald-600 hover:bg-emerald-700 shadow-[0_8px_16px_-6px_rgba(16,185,129,0.3)] font-bold text-xs uppercase tracking-widest transition-all hover:scale-[1.02] active:scale-[0.98]"
+                    className="rounded-xl px-5 h-10 gap-2 bg-emerald-600 hover:bg-emerald-700 font-bold text-xs uppercase tracking-widest transition-all"
                   >
-                    <IconCheck size={16} strokeWidth={3} /> Approve
+                    <IconCheck size={16} strokeWidth={3} /> Approve Audit
                   </Button>
                   <Button
                     onClick={confirmReject}
                     variant="outline"
-                    className="rounded-xl px-6 h-11 gap-2 border-red-200 text-red-600 hover:bg-red-50 font-bold text-xs uppercase tracking-widest transition-all"
+                    className="rounded-xl px-4 h-10 gap-2 border-slate-200 text-slate-500 hover:text-red-600 transition-all font-bold text-xs uppercase tracking-widest"
                   >
                     <IconX size={16} /> Reject
                   </Button>
-                  <Button
-                    onClick={handleDownloadUnlocked}
-                    variant="outline"
-                    size="icon"
-                    className="rounded-xl h-11 w-11 shrink-0 border-primary text-primary hover:bg-primary/5"
-                    title="Unlocked PDF"
-                  >
-                    <IconDownload size={18} strokeWidth={2} />
-                  </Button>
-                </div>
+                </>
               )}
 
+              {data.isApproved && (
+                <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-4 h-10 rounded-xl border border-emerald-100 font-bold text-[10px] uppercase tracking-widest">
+                  <IconShieldCheck size={14} strokeWidth={3} /> Verified Report
+                </div>
+              )}
+              
+              <Button
+                onClick={handleDownloadUnlocked}
+                variant="outline"
+                size="icon"
+                className="rounded-xl h-10 w-10 border-slate-200 text-slate-400 hover:text-primary hover:border-primary/30 transition-all"
+                title="Download PDF"
+              >
+                <IconDownload size={18} strokeWidth={2} />
+              </Button>
+            </div>
+
+            <div className="flex items-center gap-3">
               {isSavedView && (
-                <div className="flex gap-2">
+                <div className="flex items-center gap-2">
                   <Button
                     variant="ghost"
                     size="sm"
                     onClick={() => setShowRawJson(true)}
-                    className="h-11 px-4 rounded-xl border border-slate-100/50 hover:bg-slate-50 transition-all font-mono text-[10px] font-bold text-slate-400 hover:text-slate-900 uppercase tracking-widest"
+                    className="h-9 px-3 rounded-xl border border-slate-100/50 hover:border-slate-200 hover:bg-slate-50 text-slate-400 hover:text-slate-600 font-mono text-[9px] font-bold uppercase tracking-wider transition-all"
                   >
-                    Raw JSON
+                    RAW JSON
                   </Button>
+
+                  <div className="h-6 w-px bg-slate-100 mx-1" />
 
                   <Button
                     variant="outline"
@@ -1369,27 +1439,16 @@ function Statement() {
                     onClick={handleReIngest}
                     disabled={reprocessing}
                     className={cn(
-                      "h-11 px-4 rounded-xl border-dashed transition-all font-bold text-[10px] uppercase tracking-widest gap-2",
+                      "h-9 px-3 rounded-xl border-dashed transition-all font-bold text-[9px] uppercase tracking-widest gap-2",
                       reprocessing && "animate-pulse",
                       data?.status === 'FAILED'
-                        ? "border-red-300 bg-red-50 text-red-600 hover:bg-red-100 ring-1 ring-red-200 shadow-[0_0_15px_-3px_rgba(239,68,68,0.2)]"
-                        : "border-slate-200 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200"
+                        ? "border-red-200 bg-red-50 text-red-600"
+                        : "border-slate-200 hover:bg-slate-50 text-slate-500"
                     )}
-                    title={data?.status === 'FAILED' ? `Error: ${data.processingError}` : "Re-launch AI extraction cycle"}
                   >
-                    {reprocessing ? (
-                      <>
-                        <IconLoader2 size={14} className={cn("animate-spin", data?.status === 'FAILED' ? "text-red-500" : "text-emerald-500")} />
-                        {data?.status === 'FAILED' ? 'Retrying...' : 'Ingesting...'}
-                      </>
-                    ) : (
-                      <>
-                        {data?.status === 'FAILED' ? <IconAlertTriangle size={14} /> : <IconReceipt2 size={14} />}
-                        {data?.status === 'FAILED' ? 'Retry Audit' : 'Re-Ingest'}
-                      </>
-                    )}
+                    {reprocessing ? <IconLoader2 size={12} className="animate-spin" /> : <IconReceipt2 size={12} />}
+                    {data?.status === 'FAILED' ? 'Retry' : 'Re-Ingest'}
                   </Button>
-
 
                   <Button
                     variant="outline"
@@ -1397,50 +1456,43 @@ function Statement() {
                     onClick={handleReprocess}
                     disabled={reprocessing}
                     className={cn(
-                      "h-11 px-4 rounded-xl border-dashed border-slate-200 hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-all font-bold text-[10px] uppercase tracking-widest gap-2",
+                      "h-9 px-3 rounded-xl border-dashed border-slate-200 hover:bg-indigo-50 hover:text-indigo-600 transition-all font-bold text-[9px] uppercase tracking-widest gap-2",
                       reprocessing && "animate-pulse"
                     )}
                   >
-                    {reprocessing ? (
-                      <>
-                        <IconLoader2 size={14} className="animate-spin text-indigo-500" />
-                        Mapping...
-                      </>
-                    ) : (
-                      <>
-                        <IconMath size={14} />
-                        Re-Sync AI
-                      </>
-                    )}
+                    {reprocessing ? <IconLoader2 size={12} className="animate-spin text-indigo-500" /> : <IconMath size={12} />}
+                    Re-Sync
                   </Button>
-                </div>
-              )}
 
-              {isSavedView && data.status === 'COMPLETED' && (
-                <div
-                  onClick={() => setShowMathDetails(true)}
-                  className={cn("flex flex-col items-end gap-1 px-4 py-1.5 rounded-xl border border-l-4 cursor-pointer hover:shadow-md transition-all active:scale-95",
-                    data.extractionQuality === 'verified' ? "bg-emerald-50 border-emerald-100 border-l-emerald-500 hover:bg-emerald-100/50" :
-                      data.extractionQuality === 'minor_mismatch' ? "bg-amber-50 border-amber-100 border-l-amber-500 hover:bg-amber-100/50" :
-                        data.extractionQuality === 'extraction_error' ? "bg-red-50 border-red-100 border-l-red-500 hover:bg-red-100/50" :
-                          "bg-slate-50 border-slate-100 border-l-slate-400 hover:bg-slate-100"
-                  )}>
-                  <div className="flex items-center gap-2">
-                    {data.extractionQuality === 'verified' && <IconShieldCheck size={14} className="text-emerald-600" />}
-                    {data.extractionQuality === 'minor_mismatch' && <IconAlertTriangle size={14} className="text-amber-600" />}
-                    {data.extractionQuality === 'extraction_error' && <IconShieldX size={14} className="text-red-600" />}
-                    {data.extractionQuality === 'unverified' && <IconFileOff size={14} className="text-slate-400" />}
-
-                    <span className={cn("text-[10px] font-black uppercase tracking-widest",
-                      data.extractionQuality === 'verified' ? "text-emerald-700" :
-                        data.extractionQuality === 'minor_mismatch' ? "text-amber-700" :
-                          data.extractionQuality === 'extraction_error' ? "text-red-700" :
-                            "text-slate-500"
-                    )}>
-                      {data.extractionQuality === 'verified' ? 'Math Verified' :
-                        data.extractionQuality === 'minor_mismatch' ? 'Minor Mismatch' :
-                          data.extractionQuality === 'extraction_error' ? 'Extraction Error' : 'Unverified'}
+                  {/* Engine Badge */}
+                  <div className="h-9 px-3 rounded-xl bg-slate-50 border border-slate-100 flex items-center gap-2">
+                    <div className="h-1.5 w-1.5 rounded-full bg-slate-300" />
+                    <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                      {data.ocrEngine?.startsWith('ocr_space') ? 'OCR.space' : 'Gemini Native'}
                     </span>
+                  </div>
+
+                  {/* Math Verification Status */}
+                  <div
+                    onClick={() => setShowMathDetails(true)}
+                    className={cn("h-10 flex items-center gap-3 px-4 rounded-xl border transition-all cursor-pointer hover:bg-slate-50/50 active:scale-95",
+                      data.extractionQuality === 'verified' ? "bg-emerald-50/30 border-emerald-100 text-emerald-700" :
+                        data.extractionQuality === 'minor_mismatch' ? "bg-amber-50/30 border-amber-100 text-amber-700" :
+                          data.extractionQuality === 'extraction_error' ? "bg-red-50/30 border-red-100 text-red-700" :
+                            "bg-slate-50/30 border-slate-100 text-slate-500"
+                    )}>
+                    <div className="flex flex-col items-start">
+                      <span className="text-[9px] font-bold uppercase tracking-widest leading-tight">
+                        {data.extractionQuality === 'verified' ? 'Math OK' :
+                          data.extractionQuality === 'minor_mismatch' ? 'Mismatch' :
+                            data.extractionQuality === 'extraction_error' ? 'Error' : 'Pending'}
+                      </span>
+                      {data.reconciliation?.balanceDelta !== 0 && (
+                        <span className="text-[8px] font-bold opacity-60 leading-none mt-0.5">
+                           Δ {fmt(data.reconciliation?.balanceDelta, sym)}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {data.reconciliation && data.extractionQuality !== 'unverified' && (
