@@ -109,11 +109,23 @@ const Upload = () => {
   const [passwordGateStatus, setPasswordGateStatus] = useState<Record<string, PwGateStatus>>({});
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
   const [lastScannedAt, setLastScannedAt] = useState<string | null>(null);
+  const [nextPageToken, setNextPageToken] = useState('');
+  const [activeBankTab, setActiveBankTab] = useState('All');
   const [gmailPipelineStep, setGmailPipelineStep] = useState<'idle' | 'checking_pw' | 'uploading'>('idle');
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const gmailOAuthToastDone = useRef(false);
   const gmailRestoreDone = useRef(false);
+
+  const availableBanks = React.useMemo(() => {
+    const banks = new Set<string>();
+    candidates.forEach(c => { if (c.bank) banks.add(c.bank); });
+    return ['All', ...Array.from(banks).sort()];
+  }, [candidates]);
+
+  const filteredCandidates = React.useMemo(() => {
+    return candidates.filter(c => activeBankTab === 'All' || c.bank === activeBankTab);
+  }, [candidates, activeBankTab]);
 
   const refreshGmailStatus = useCallback(async () => {
     try {
@@ -308,6 +320,7 @@ const Upload = () => {
             toast.error(data.error || 'Scan failed.');
          } else if (data.status === 'completed' && data.candidates) {
             const fetched = data.candidates || [];
+            if (data.nextPageToken !== undefined) setNextPageToken(data.nextPageToken);
             
              setCandidates((prev) => {
                if (!isManualTrigger && prev.length > 0) return prev; // Do not clobber user's restored cache on load
@@ -317,9 +330,9 @@ const Upload = () => {
                  .map((c: any) => c.id);
                setSelectedIds(fresh);
                
-               const passes: Record<string, string> = {};
+               const passes: Record<string, string> = { ...candidatePasswords };
                fetched.forEach((c: any) => {
-                 passes[c.id] = c.savedPassword || 'gaur2607';
+                 if (!passes[c.id]) passes[c.id] = c.savedPassword || 'gaur2607';
                });
                setCandidatePasswords(passes);
                
@@ -341,7 +354,7 @@ const Upload = () => {
     } catch {
       setGmailBusy(false);
     }
-  }, []);
+  }, [candidatePasswords]);
 
   useEffect(() => {
     if (gmailStatus?.connected && !gmailBusy) {
@@ -359,12 +372,30 @@ const Upload = () => {
     setGmailBusy(true);
     setCandidates([]);
     setSelectedIds([]);
+    setNextPageToken('');
+    setActiveBankTab('All');
     try {
-      await api.post('/api/gmail/candidates');
+      await api.post('/api/gmail/candidates', { loadMore: false });
       toast.info('Started scanning inbox...');
       checkScanStatus(true);
     } catch (e: any) {
       toast.error(e.response?.data?.message || 'Failed to start scan.');
+      setGmailBusy(false);
+    }
+  };
+
+  const loadMoreGmailCandidates = async () => {
+    if (!nextPageToken && activeBankTab === 'All') return;
+    setGmailBusy(true);
+    try {
+      await api.post('/api/gmail/candidates', { 
+        loadMore: true,
+        bankHint: activeBankTab !== 'All' ? activeBankTab : undefined
+      });
+      toast.info(activeBankTab !== 'All' ? `Searching older ${activeBankTab} statements...` : 'Fetching older statements...');
+      checkScanStatus(true);
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || 'Failed to fetch more.');
       setGmailBusy(false);
     }
   };
@@ -410,7 +441,10 @@ const Upload = () => {
     if (selectedIds.length === 0) return;
 
     const rows = candidates.filter(
-      (c) => selectedIds.includes(c.id) && !c.alreadyProcessed && c.shouldProcess !== false
+      (c) => selectedIds.includes(c.id) && 
+             !c.alreadyProcessed && 
+             c.shouldProcess !== false &&
+             (activeBankTab === 'All' || c.bank === activeBankTab)
     );
     if (rows.length === 0) {
       toast.message('No statements selected for processing.');
@@ -591,7 +625,7 @@ const Upload = () => {
 
       <div className="flex flex-1 gap-6 min-h-0">
         {/* LEFT COLUMN: Controls */}
-        <div className="w-1/3 min-w-[360px] max-w-[420px] flex flex-col gap-6 overflow-y-auto pr-2 pb-4 style-scroll">
+        <div className="w-1/3 min-w-[360px] max-w-[420px] flex flex-col gap-6 overflow-y-auto pr-2 pb-4 style-scroll no-scrollbar">
           <Card className="rounded-2xl p-5 bg-muted/20 border border-primary/10 space-y-4 shadow-sm">
              {/* Statement type */}
              <div className="flex flex-col gap-2">
@@ -709,7 +743,10 @@ const Upload = () => {
              {candidates.length > 0 && (
                <div className="flex items-center gap-3 shrink-0">
                  <div className="text-xs bg-primary/5 text-primary px-2.5 py-1 rounded-full font-medium">
-                   {selectedIds.length} Selected
+                    {selectedIds.filter(id => {
+                      const c = candidates.find(cand => cand.id === id);
+                      return c && (activeBankTab === 'All' || c.bank === activeBankTab);
+                    }).length} Selected
                  </div>
                  <Button
                    type="button"
@@ -722,13 +759,43 @@ const Upload = () => {
                      ? 'Checking pw...'
                      : gmailBusy && gmailPipelineStep === 'uploading'
                        ? 'Processing...'
-                       : `Process Selected`}
+                       : activeBankTab === 'All'
+                          ? 'Process Selected'
+                          : `Process ${activeBankTab} Selected`}
                  </Button>
                </div>
              )}
            </div>
 
-           <div className="flex-1 overflow-y-auto min-h-0 p-4 relative">
+           {candidates.length > 0 && availableBanks.length > 2 && (
+              <div className="px-4 py-2 bg-muted/5 border-b border-primary/10 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                {availableBanks.map((bank) => {
+                  const count = candidates.filter(c => bank === 'All' || c.bank === bank).length;
+                  return (
+                    <button
+                      key={bank}
+                      onClick={() => setActiveBankTab(bank)}
+                      className={cn(
+                        "px-3 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0 flex items-center gap-2",
+                        activeBankTab === bank 
+                          ? "bg-primary text-primary-foreground shadow-sm" 
+                          : "text-muted-foreground hover:bg-muted/50"
+                      )}
+                    >
+                      {bank}
+                      <span className={cn(
+                        "px-1.5 py-0.5 rounded-md text-[10px]",
+                        activeBankTab === bank ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground"
+                      )}>
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+           <div className="flex-1 overflow-y-auto min-h-0 p-4 relative no-scrollbar">
               {candidates.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground border-2 border-dashed border-primary/10 rounded-xl p-8 bg-background/50">
                   <div className="w-16 h-16 rounded-full bg-primary/5 flex items-center justify-center mb-4">
@@ -737,19 +804,46 @@ const Upload = () => {
                   <p className="font-semibold text-foreground/80 text-lg">No candidates loaded</p>
                   <p className="text-sm mt-1 max-w-sm">Connect Gmail and click Scan Inbox to securely find and parse bank statements from your emails.</p>
                 </div>
+              ) : filteredCandidates.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground border-2 border-dashed border-primary/10 rounded-xl p-8 bg-background/50">
+                   <p className="font-semibold text-lg">No {activeBankTab} candidates found.</p>
+                   <p className="text-sm mt-1">Try searching Gmail specifically for this bank below.</p>
+                   <Button 
+                      onClick={loadMoreGmailCandidates}
+                      disabled={gmailBusy}
+                      className="mt-4 gap-2 rounded-xl"
+                   >
+                      <IconRefresh size={16} className={cn(gmailBusy && 'animate-spin')} />
+                      Search Gmail for {activeBankTab}
+                   </Button>
+                </div>
               ) : (
                 <div className="rounded-xl border border-primary/10 bg-background overflow-hidden relative shadow-sm">
                   <table className="w-full text-left text-sm whitespace-nowrap">
                     <thead className="bg-muted/50 text-[11px] text-muted-foreground uppercase tracking-wide sticky top-0 z-10 box-border border-b border-primary/10">
                       <tr>
-                        <th className="p-3 w-10"></th>
+                        <th className="p-3 w-10 text-center">
+                           <input
+                              type="checkbox"
+                              className="rounded border-primary/30 cursor-pointer w-4 h-4 text-primary"
+                              checked={filteredCandidates.every(c => selectedIds.includes(c.id))}
+                              onChange={(e) => {
+                                 const allVisibleIds = filteredCandidates.map(c => c.id);
+                                 if (e.target.checked) {
+                                    setSelectedIds(prev => Array.from(new Set([...prev, ...allVisibleIds])));
+                                 } else {
+                                    setSelectedIds(prev => prev.filter(id => !allVisibleIds.includes(id)));
+                                 }
+                              }}
+                           />
+                        </th>
                         <th className="p-3 font-semibold">Document</th>
-                        <th className="p-3 font-semibold">Bank</th>
+                        {activeBankTab === 'All' && <th className="p-3 font-semibold">Bank</th>}
                         <th className="p-3 font-semibold">Password & Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-primary/5">
-                      {candidates.map((c) => {
+                      {filteredCandidates.map((c) => {
                         const isSelected = selectedIds.includes(c.id);
                         const lockedAsDone = Boolean(c.alreadyProcessed);
                         const classifierSkipped = c.shouldProcess === false;
@@ -762,7 +856,7 @@ const Upload = () => {
                               (!isSelected || lockedAsDone || classifierSkipped) && 'opacity-60 bg-muted/10'
                             )}
                           >
-                            <td className="p-3 align-top">
+                            <td className="p-3 align-top text-center">
                                <input
                                  type="checkbox"
                                  className="rounded border-primary/30 mt-1 cursor-pointer w-4 h-4 text-primary"
@@ -780,28 +874,44 @@ const Upload = () => {
                                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>
                                     {c.parsedPeriod.from} <span className="opacity-40 font-normal">to</span> {c.parsedPeriod.to}
                                   </p>
-                               )}
+                                )}
                             </td>
-                            <td className="p-3 align-top whitespace-normal min-w-[140px]">
-                               <div className="flex flex-col items-start gap-1.5">
-                                 <span className="text-[11px] bg-primary/5 px-2 py-0.5 rounded border border-primary/10 font-bold tracking-wide">{c.bank}</span>
-                                 {lockedAsDone && (
-                                    <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 font-semibold tracking-wider uppercase">
-                                      Processed
-                                    </span>
-                                 )}
-                                 {classifierSkipped && !lockedAsDone && (
-                                    <span className="text-[10px] text-slate-600 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200 font-semibold tracking-wider uppercase">
-                                      Skipped
-                                    </span>
-                                 )}
-                                 {c.classificationReason && (
-                                   <p className="text-[10px] text-muted-foreground leading-tight max-w-[150px] mt-0.5">{c.classificationReason}</p>
-                                 )}
-                               </div>
-                            </td>
+                            {activeBankTab === 'All' && (
+                               <td className="p-3 align-top whitespace-normal min-w-[140px]">
+                                 <div className="flex flex-col items-start gap-1.5">
+                                   <span className="text-[11px] bg-primary/5 px-2 py-0.5 rounded border border-primary/10 font-bold tracking-wide">{c.bank}</span>
+                                   {lockedAsDone && (
+                                      <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 font-semibold tracking-wider uppercase">
+                                        Processed
+                                      </span>
+                                   )}
+                                   {classifierSkipped && !lockedAsDone && (
+                                      <span className="text-[10px] text-slate-600 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200 font-semibold tracking-wider uppercase">
+                                        Skipped
+                                      </span>
+                                   )}
+                                   {c.classificationReason && (
+                                     <p className="text-[10px] text-muted-foreground leading-tight max-w-[150px] mt-0.5">{c.classificationReason}</p>
+                                   )}
+                                 </div>
+                               </td>
+                            )}
                             <td className="p-3 align-top w-[360px] whitespace-normal">
-                               {isSelected && !lockedAsDone && !classifierSkipped && (
+                               {lockedAsDone ? (
+                                  <div className="flex items-center gap-2 py-1">
+                                     <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+                                        <IconCheck size={16} strokeWidth={3} />
+                                     </div>
+                                     <div>
+                                        <p className="text-xs font-semibold text-emerald-800">Successfully Imported</p>
+                                        <p className="text-[10px] text-emerald-600/70">Securely stored and indexed</p>
+                                     </div>
+                                  </div>
+                               ) : classifierSkipped ? (
+                                  <div className="py-1">
+                                     <p className="text-xs text-muted-foreground italic">Excluded by classifier</p>
+                                  </div>
+                               ) : isSelected ? (
                                  <div className="flex flex-col gap-2.5 animate-in fade-in zoom-in-95 duration-200">
                                    {c.encrypted !== false && (
                                      <>
@@ -868,6 +978,8 @@ const Upload = () => {
                                       </div>
                                    </div>
                                  </div>
+                               ) : (
+                                 <p className="text-[10px] text-muted-foreground italic">Select to edit password</p>
                                )}
                             </td>
                           </tr>
@@ -875,6 +987,25 @@ const Upload = () => {
                       })}
                     </tbody>
                   </table>
+                  
+                  {(nextPageToken || activeBankTab !== 'All') && (
+                    <div className="p-4 border-t border-primary/10 bg-muted/5 flex justify-center">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={loadMoreGmailCandidates}
+                        disabled={gmailBusy}
+                        className="gap-2 text-xs font-medium bg-background hover:bg-primary/5 transition-all"
+                      >
+                        {gmailBusy ? (
+                          <IconLoader2 size={14} className="animate-spin" />
+                        ) : (
+                          <IconRefresh size={14} />
+                        )}
+                        {activeBankTab !== 'All' ? `Search more ${activeBankTab} from Gmail` : 'Load Older Statements'}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
            </div>

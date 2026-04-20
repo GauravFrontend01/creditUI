@@ -31,6 +31,7 @@ const userSchema = new mongoose.Schema({
   gmailScanStatus: { type: String, enum: ['idle', 'scanning', 'completed', 'error'], default: 'idle' },
   gmailScanResult: { type: mongoose.Schema.Types.Mixed, default: null },
   gmailScanError: { type: String, default: '' },
+  gmailNextPageToken: { type: String, default: '' },
   /** Message IDs we already imported as statements (avoid duplicates on sync) */
   gmailImportedMessageIds: { type: [String], default: [] },
   /** Stored PDF passwords for auto-unlocking (e.g. { label: 'Kotak', password: '...' }) */

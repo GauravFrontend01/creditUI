@@ -381,7 +381,8 @@ exports.disconnectGmail = async (req, res) => {
   }
 };
 
-async function runBackgroundCandidateScan(userId) {
+async function runBackgroundCandidateScan(userId, options = {}) {
+  const { pageToken = null, append = false, bankHint = null } = options;
   const startedAt = Date.now();
   try {
     const user = await User.findById(userId).select('+gmailRefreshToken');
@@ -390,23 +391,30 @@ async function runBackgroundCandidateScan(userId) {
     }
 
     await User.findByIdAndUpdate(userId, { gmailScanStatus: 'scanning', gmailScanError: '' });
+    if (!append) {
+      await User.findByIdAndUpdate(userId, { gmailNextPageToken: '' }); 
+    }
 
-    const maxResults = 12;
+    const maxResults = 20; // Reverted to 20 since we use pagination now
     const oauth2Client = createOAuth2Client();
     oauth2Client.setCredentials({
       refresh_token: user.gmailRefreshToken,
       access_token: user.gmailAccessToken || undefined,
       expiry_date: user.gmailTokenExpiry ? user.gmailTokenExpiry.getTime() : undefined,
     });
-
+    
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-    const q = defaultGmailQuery();
+    let q = defaultGmailQuery();
+    if (bankHint) {
+       q = `${bankHint} (${q})`;
+    }
     console.log(
-      `[Gmail Candidates] start user=${userId} query="${q}" maxResults=${maxResults}`
+      `[Gmail Candidates] start user=${userId} query="${q}" maxResults=${maxResults} pageToken=${pageToken || 'initial'} bankHint=${bankHint || 'none'}`
     );
-    const listRes = await gmail.users.messages.list({ userId: 'me', q, maxResults });
+    const listRes = await gmail.users.messages.list({ userId: 'me', q, maxResults, pageToken: pageToken || undefined });
 
     const messageRefs = listRes.data.messages || [];
+    const nextPageToken = listRes.data.nextPageToken || '';
     console.log(
       `[Gmail API] messages.list returned count=${messageRefs.length} nextPageToken=${listRes.data.nextPageToken ? 'yes' : 'no'}`
     );
@@ -556,9 +564,19 @@ async function runBackgroundCandidateScan(userId) {
       `[Gmail Candidates] response candidates=${enriched.length} elapsedMs=${Date.now() - startedAt}`
     );
     
+    const userCurrent = await User.findById(userId);
+    let finalCandidates = enriched;
+    if (append && Array.isArray(userCurrent.gmailScanResult)) {
+       // Merge, ensuring no duplicates by messageId-filename key
+       const existingIds = new Set(userCurrent.gmailScanResult.map(c => c.id));
+       const freshUnique = enriched.filter(c => !existingIds.has(c.id));
+       finalCandidates = [...userCurrent.gmailScanResult, ...freshUnique];
+    }
+
     await User.findByIdAndUpdate(userId, {
        gmailScanStatus: 'completed',
-       gmailScanResult: enriched,
+       gmailScanResult: finalCandidates,
+       gmailNextPageToken: nextPageToken,
     });
   } catch (error) {
     console.error('runBackgroundCandidateScan failed', error);
@@ -584,7 +602,13 @@ exports.startGmailCandidatesScan = async (req, res) => {
     }
 
     // Fire and forget background function
-    runBackgroundCandidateScan(req.user._id).catch(console.error);
+    const loadMore = !!req.body.loadMore;
+    const bankHint = req.body.bankHint || null;
+    runBackgroundCandidateScan(req.user._id, { 
+       pageToken: loadMore ? user.gmailNextPageToken : null, 
+       append: loadMore,
+       bankHint
+    }).catch(console.error);
     
     res.json({ message: 'Scan started', status: 'scanning' });
   } catch (error) {
@@ -601,6 +625,7 @@ exports.listGmailCandidates = async (req, res) => {
     res.json({
       status: user.gmailScanStatus || 'idle',
       candidates: user.gmailScanResult || [],
+      nextPageToken: user.gmailNextPageToken || '',
       error: user.gmailScanStatus === 'error' ? user.gmailScanError : ''
     });
   } catch (error) {
