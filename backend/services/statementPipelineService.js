@@ -18,41 +18,38 @@ Rules:
 1) Include ALL transaction rows (do not skip any row).
 2) Detect statementType as either "BANK" or "CREDIT_CARD".
 3) For each transaction, return:
-   - date
-   - description
-   - merchantName
-   - amount (numeric, positive)
-   - deposit (numeric or null)
-   - withdrawal (numeric or null)
-   - balance (numeric or null)
+   - date, description, merchantName, amount (numeric, positive)
+   - deposit/withdrawal/balance (numeric or null)
    - type ("Credit" or "Debit")
-   - category (one of: Transfer, EMI, Salary, Refund, ATM, Cash, Card Payment, Shopping, Travel, Utility, Food, Health, Education, Investment, Fee, Interest, Tax, Subscription, Rent, Insurance, Other)
-   - box: [top, left, bottom, right] normalized in 0..1000
-   - page: 1-indexed page number
+   - category (e.g., Food, Shopping, Transfer)
+   - box: [top, left, bottom, right] normalized in 0..1000, page: 1-indexed
 4) Return meaningful numeric fields needed for validation:
-   - openingBalance, closingBalance, totalCredits, totalDebits, totalDeposits, totalWithdrawals
+   - BANK: openingBalance, closingBalance, totalDeposits, totalWithdrawals
+   - CREDIT_CARD: previousBalance, outstandingTotal, minPaymentDue, creditLimit, availableLimit
 5) Also return:
    - bankName, accountNumber, accountHolder, currency, statementDate
-     (for these fields prefer object format: { val, box, page })
    - statementPeriod: { from, to }
+   - paymentDueDate (for credit cards)
    - reconciliationSummary: { openingBalance, closingBalance, totalDebits, totalCredits, transactionCount }
-   - summary (short text)
 
-Output JSON object schema:
+Output JSON object schema (use object format { val, box, page } for all vital fields):
 {
   "statementType": "BANK" | "CREDIT_CARD",
-  "bankName": string,
-  "accountNumber": string,
-  "accountHolder": string,
+  "bankName": { "val": string, "box": [], "page": 0 },
+  "accountNumber": { "val": string, "box": [], "page": 0 },
+  "accountHolder": { "val": string, "box": [], "page": 0 },
   "currency": string,
-  "statementDate": string,
-  "statementPeriod": { "from": string, "to": string },
-  "openingBalance": number | null,
-  "closingBalance": number | null,
+  "statementDate": { "val": string, "box": [], "page": 0 },
+  "statementPeriod": { "from": string, "to": string, "box": [], "page": 0 },
+  "paymentDueDate": { "val": string, "box": [], "page": 0 },
+  "openingBalance": { "val": number, "box": [], "page": 0 },
+  "closingBalance": { "val": number, "box": [], "page": 0 },
+  "outstandingTotal": { "val": number, "box": [], "page": 0 },
+  "minPaymentDue": { "val": number, "box": [], "page": 0 },
+  "creditLimit": { "val": number, "box": [], "page": 0 },
+  "availableLimit": { "val": number, "box": [], "page": 0 },
   "totalCredits": number | null,
   "totalDebits": number | null,
-  "totalDeposits": number | null,
-  "totalWithdrawals": number | null,
   "transactions": [
     {
       "date": string,
@@ -106,7 +103,7 @@ function toStatementPeriod(value) {
     return {
       from: value.from || '',
       to: value.to || '',
-      box: Array.isArray(value.box) ? value.box : [],
+      box: normalizeBox(value.box),
       page: value.page || 0,
     };
   }
@@ -146,8 +143,11 @@ function valueOfMaybeField(value) {
 }
 
 function normalizeBox(boxCandidate) {
-  if (!Array.isArray(boxCandidate) || boxCandidate.length < 4) return [];
-  return boxCandidate
+  if (!Array.isArray(boxCandidate) || boxCandidate.length === 0) return [];
+  // Flatten one level of nesting: Gemini sometimes returns [[top, left, bottom, right]]
+  const flat = Array.isArray(boxCandidate[0]) ? boxCandidate[0] : boxCandidate;
+  if (flat.length < 4) return [];
+  return flat
     .slice(0, 4)
     .map((n) => {
       const v = Number(n);
@@ -517,9 +517,12 @@ async function processStatementPdf({
   statementType = 'CREDIT_CARD',
   gmailMessageId = null,
   isPreUnlocked = false,
+  batchIndex = 0,
+  batchTotal = 0,
 }) {
+  const prog = batchTotal > 0 ? `[${batchIndex}/${batchTotal}] ` : '';
   console.log(
-    `[Pipeline] Start processing file="${originalFileName}" user=${userId} source=${gmailMessageId ? 'gmail' : 'manual'} type=${statementType}`
+    `${prog}[Pipeline] Start processing file="${originalFileName}" user=${userId} source=${gmailMessageId ? 'gmail' : 'manual'} type=${statementType}`
   );
 
   let pdfForProcessing = pdfBuffer;

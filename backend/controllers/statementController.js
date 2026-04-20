@@ -93,6 +93,8 @@ exports.createStatement = async (req, res) => {
     const emailPeriodFrom = String(req.body.emailPeriodFrom || '').trim();
     const emailPeriodTo = String(req.body.emailPeriodTo || '').trim();
     const emailAccountHint = String(req.body.emailAccountHint || '').trim();
+    const batchIndex = Number(req.body.batchIndex) || 0;
+    const batchTotal = Number(req.body.batchTotal) || 0;
 
     if (!pdfFile) return res.status(400).json({ message: 'No PDF file uploaded' });
     if (!isUnlocked && !pdfPassword) return res.status(400).json({ message: 'PDF password is required' });
@@ -132,6 +134,8 @@ exports.createStatement = async (req, res) => {
       statementType,
       isPreUnlocked: isUnlocked,
       gmailMessageId,
+      batchIndex,
+      batchTotal,
     });
 
     // Remember the working password for this bank if provided

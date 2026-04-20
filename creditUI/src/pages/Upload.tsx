@@ -62,6 +62,32 @@ async function canOpenPdfWithPassword(file: File, password: string, treatAsEncry
 }
 
 const GMAIL_UPLOAD_CACHE_KEY = 'creditUI_gmail_upload_cache_v1';
+const BATCH_CACHE_KEY = 'creditUI_batch_progress_v1';
+
+type BatchCacheItem = { id: string; filename: string; status: 'queued' | 'syncing' | 'done' | 'error'; error?: string };
+type BatchCachePayload = { items: BatchCacheItem[]; startedAt: string };
+
+function readBatchCache(): BatchCachePayload | null {
+  try {
+    const raw = localStorage.getItem(BATCH_CACHE_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as BatchCachePayload;
+    if (!Array.isArray(p?.items)) return null;
+    return p;
+  } catch { return null; }
+}
+
+function writeBatchCache(items: BatchCacheItem[]) {
+  const existing = readBatchCache();
+  localStorage.setItem(BATCH_CACHE_KEY, JSON.stringify({
+    items,
+    startedAt: existing?.startedAt || new Date().toISOString(),
+  }));
+}
+
+function clearBatchCache() {
+  localStorage.removeItem(BATCH_CACHE_KEY);
+}
 
 type GmailCachePayload = {
   email: string;
@@ -112,10 +138,43 @@ const Upload = () => {
   const [nextPageToken, setNextPageToken] = useState('');
   const [activeBankTab, setActiveBankTab] = useState('All');
   const [gmailPipelineStep, setGmailPipelineStep] = useState<'idle' | 'checking_pw' | 'uploading'>('idle');
+  const [batchItems, setBatchItemsRaw] = useState<{ id: string; filename: string; status: 'queued' | 'syncing' | 'done' | 'error'; error?: string }[]>(() => {
+    // Restore from localStorage on mount; mark in-flight items as interrupted
+    const cached = readBatchCache();
+    if (!cached?.items?.length) return [];
+    return cached.items.map(item =>
+      (item.status === 'syncing' || item.status === 'queued')
+        ? { ...item, status: 'error' as const, error: 'Interrupted — page was reloaded' }
+        : item
+    );
+  });
+  const [activeBatch, setActiveBatch] = useState(false);
+
+  // Wrap setBatchItems to also persist to localStorage
+  const setBatchItems = (updater: ((prev: { id: string; filename: string; status: 'queued' | 'syncing' | 'done' | 'error'; error?: string }[]) => { id: string; filename: string; status: 'queued' | 'syncing' | 'done' | 'error'; error?: string }[]) | { id: string; filename: string; status: 'queued' | 'syncing' | 'done' | 'error'; error?: string }[]) => {
+    setBatchItemsRaw(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      writeBatchCache(next);
+      return next;
+    });
+  };
+  const [showSyncPopover, setShowSyncPopover] = useState(false);
+  const syncPopoverRef = useRef<HTMLDivElement>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const gmailOAuthToastDone = useRef(false);
   const gmailRestoreDone = useRef(false);
+
+  // Close sync popover on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (syncPopoverRef.current && !syncPopoverRef.current.contains(e.target as Node)) {
+        setShowSyncPopover(false);
+      }
+    };
+    if (showSyncPopover) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showSyncPopover]);
 
   const availableBanks = React.useMemo(() => {
     const banks = new Set<string>();
@@ -504,65 +563,84 @@ const Upload = () => {
       }
 
       setGmailPipelineStep('uploading');
+      setActiveBatch(true);
+      
+      const initialBatch = rows.map(r => ({
+        id: r.id,
+        filename: r.filename,
+        status: 'queued' as const
+      }));
+      // Clear previous batch and start fresh
+      clearBatchCache();
+      setBatchItems(initialBatch);
 
-      const uploadResults = await Promise.all(
-        rows.map(async (c) => {
-          const enc = treatEncrypted(c);
-          const pwd = String(candidatePasswords[c.id] ?? '').trim();
-          const effectivePassword = enc ? pwd : pwd || 'gaur2607';
-          try {
-            const file = await downloadGmailPdfAsFile(c);
-            const { file: unlockedFileResult } = await unlockPdfInBrowser(file, effectivePassword);
+      const CONCURRENCY_LIMIT = 3;
+      const results: any[] = [];
+      const queue = [...rows];
+      let finishedCount = 0;
 
-            const formData = new FormData();
-            formData.append('pdf', unlockedFileResult);
-            formData.append('statementType', statementType);
-            formData.append('isUnlocked', 'true');
-            formData.append('gmailMessageId', c.messageId);
-            formData.append('pdfPassword', effectivePassword); // Send the working password to be saved
-            formData.append('bankLabel', c.bank); // Send the bank label for password mapping
-            if (c.parsedPeriod?.from) formData.append('emailPeriodFrom', String(c.parsedPeriod.from));
-            if (c.parsedPeriod?.to) formData.append('emailPeriodTo', String(c.parsedPeriod.to));
-            if (c.accountHint) formData.append('emailAccountHint', String(c.accountHint));
+      const processNext = async (): Promise<void> => {
+        if (queue.length === 0) return;
+        const c = queue.shift()!;
+        const index = rows.indexOf(c);
+        
+        setBatchItems(prev => prev.map(item => 
+          item.id === c.id ? { ...item, status: 'syncing' } : item
+        ));
 
-            const { data: created } = await api.post('/api/statements', formData, {
-              headers: { 'Content-Type': 'multipart/form-data' },
-            });
-            if (created?.alreadyProcessed) {
-              return {
-                kind: 'dup' as const,
-                c,
-                existingId: String(created.existingStatementId || 'existing record'),
-              };
-            }
-            return { kind: 'ok' as const, c };
-          } catch (inner: unknown) {
-            const msg = await parseAxiosErrorMessage(inner);
-            return { kind: 'err' as const, c, msg };
-          }
-        })
-      );
+        const enc = c.encrypted !== false;
+        const pwd = String(candidatePasswords[c.id] ?? '').trim();
+        const effectivePassword = enc ? pwd : pwd || 'gaur2607';
 
-      let ok = 0;
-      const failures: string[] = [];
-      for (const r of uploadResults) {
-        if (r.kind === 'ok') ok += 1;
-        else if (r.kind === 'dup') {
-          failures.push(`${r.c.filename}: already processed (${r.existingId})`);
-        } else failures.push(`${r.c.filename}: ${r.msg}`);
-      }
+        try {
+          const file = await downloadGmailPdfAsFile(c);
+          const { file: unlockedFileResult } = await unlockPdfInBrowser(file, effectivePassword);
 
-      if (ok > 0) {
-        toast.success(
-          ok === rows.length
-            ? `Processed ${ok} statement(s). Open Statements to review.`
-            : `Processed ${ok} of ${rows.length}. Check errors for the rest.`
-        );
+          const formData = new FormData();
+          formData.append('pdf', unlockedFileResult);
+          formData.append('statementType', statementType);
+          formData.append('isUnlocked', 'true');
+          formData.append('gmailMessageId', c.messageId);
+          formData.append('pdfPassword', effectivePassword);
+          formData.append('bankLabel', c.bank);
+          formData.append('batchIndex', String(index + 1));
+          formData.append('batchTotal', String(rows.length));
+          
+          if (c.parsedPeriod?.from) formData.append('emailPeriodFrom', String(c.parsedPeriod.from));
+          if (c.parsedPeriod?.to) formData.append('emailPeriodTo', String(c.parsedPeriod.to));
+          if (c.accountHint) formData.append('emailAccountHint', String(c.accountHint));
+
+          const { data: created } = await api.post('/api/statements', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+          
+          setBatchItems(prev => prev.map(item => 
+            item.id === c.id ? { ...item, status: 'done' } : item
+          ));
+          results.push({ kind: 'ok', c });
+        } catch (inner: unknown) {
+          const msg = await parseAxiosErrorMessage(inner);
+          setBatchItems(prev => prev.map(item => 
+            item.id === c.id ? { ...item, status: 'error', error: msg } : item
+          ));
+          results.push({ kind: 'err', c, msg });
+        } finally {
+          finishedCount += 1;
+          await processNext();
+        }
+      };
+
+      // Start initial workers
+      const workers = Array(Math.min(CONCURRENCY_LIMIT, rows.length))
+        .fill(null)
+        .map(() => processNext());
+      
+      await Promise.all(workers);
+
+      const okCount = results.filter(r => r.kind === 'ok').length;
+      if (okCount > 0) {
+        toast.success(`Batch complete: ${okCount} statements processed.`);
         await fetchGmailCandidates();
-      }
-      if (failures.length > 0) {
-        toast.error(failures[0]);
-        if (failures.length > 1) console.warn('[Gmail sync] Other failures:', failures.slice(1));
       }
       await refreshGmailStatus();
     } catch (e: unknown) {
@@ -570,6 +648,8 @@ const Upload = () => {
     } finally {
       setGmailBusy(false);
       setGmailPipelineStep('idle');
+      // Mark batch as done but keep items visible in the hub until user starts a new batch
+      setActiveBatch(false);
     }
   };
 
@@ -752,17 +832,146 @@ const Upload = () => {
                    type="button"
                    onClick={syncSelectedCandidates}
                    disabled={gmailBusy || selectedIds.length === 0}
-                   className="h-9 rounded-xl gap-2 font-medium"
+                   className={cn(
+                     "h-9 rounded-xl gap-2 font-medium transition-all",
+                     activeBatch && "bg-slate-900 border-slate-700"
+                   )}
                  >
                    <IconBrain size={16} />
                    {gmailBusy && gmailPipelineStep === 'checking_pw'
                      ? 'Checking pw...'
                      : gmailBusy && gmailPipelineStep === 'uploading'
-                       ? 'Processing...'
+                       ? 'Syncing...'
                        : activeBankTab === 'All'
                           ? 'Process Selected'
                           : `Process ${activeBankTab} Selected`}
                  </Button>
+
+                 {/* Sync Status Popover */}
+                 <div className="relative" ref={syncPopoverRef}>
+                   <Button
+                     type="button"
+                     variant="outline"
+                     onClick={() => setShowSyncPopover(v => !v)}
+                     className="h-9 w-9 p-0 rounded-xl border-border relative"
+                     title="View Sync Status"
+                   >
+                     <IconRefresh size={16} className={cn(activeBatch && "animate-spin text-primary")} />
+                     {activeBatch && (
+                       <span className="absolute -top-1 -right-1 h-2.5 w-2.5 bg-primary rounded-full border-2 border-background animate-pulse" />
+                     )}
+                   </Button>
+
+                   {showSyncPopover && (
+                     <div className="absolute right-0 top-full mt-2 z-50 w-[400px] bg-card border border-border rounded-2xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                       {/* Header */}
+                       <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-muted/30">
+                         <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/20 shrink-0">
+                           <IconBrain size={16} className={cn("text-primary", activeBatch && "animate-pulse")} />
+                         </div>
+                         <div className="flex-1 min-w-0">
+                           <h3 className="text-sm font-semibold text-foreground">Sync Status Hub</h3>
+                           <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-widest">
+                             {activeBatch ? "Running · 3 Parallel Streams" : "Idle"} · Gemini 2.5 Flash
+                           </p>
+                         </div>
+                         {activeBatch && (
+                           <span className="px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider bg-primary/10 text-primary shrink-0">
+                             Live
+                           </span>
+                         )}
+                       </div>
+
+                       {/* Item List */}
+                       <div className="px-2 py-2 space-y-1 max-h-[300px] overflow-y-auto no-scrollbar">
+                         {batchItems.length === 0 ? (
+                           <div className="py-8 text-center text-muted-foreground">
+                             <IconRefresh size={24} className="mx-auto mb-2 opacity-30" />
+                             <p className="text-xs font-medium">No sync jobs yet</p>
+                             <p className="text-[10px] mt-0.5">Start a batch to see progress here</p>
+                           </div>
+                         ) : batchItems.map((item, idx) => (
+                           <div
+                             key={item.id}
+                             className={cn(
+                               "flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all duration-300",
+                               item.status === 'syncing' ? "bg-primary/5 border-primary/20" :
+                               item.status === 'done' ? "bg-emerald-500/5 border-emerald-500/15" :
+                               item.status === 'error' ? "bg-destructive/5 border-destructive/20" :
+                               "bg-muted/20 border-border"
+                             )}
+                           >
+                             <div className={cn(
+                               "h-6 w-6 rounded-md flex items-center justify-center shrink-0",
+                               item.status === 'syncing' ? "bg-primary/10" :
+                               item.status === 'done' ? "bg-emerald-500/10" :
+                               item.status === 'error' ? "bg-destructive/10" : "bg-muted"
+                             )}>
+                               {item.status === 'syncing' && <IconLoader2 size={12} className="text-primary animate-spin" />}
+                               {item.status === 'done' && <IconCheck size={12} className="text-emerald-500" />}
+                               {item.status === 'error' && <IconX size={12} className="text-destructive" />}
+                               {item.status === 'queued' && <span className="text-[9px] font-black text-muted-foreground">{idx + 1}</span>}
+                             </div>
+
+                             <div className="flex-1 min-w-0">
+                               <p className="text-xs font-semibold text-foreground truncate">{item.filename}</p>
+                               {item.status === 'error' && item.error && (
+                                 <p className="text-[10px] text-destructive/70 truncate font-medium">{item.error}</p>
+                               )}
+                               {item.status === 'syncing' && (
+                                 <p className="text-[10px] text-primary/60 font-medium">Sending to AI pipeline...</p>
+                               )}
+                               {item.status === 'queued' && (
+                                 <p className="text-[10px] text-muted-foreground">Waiting in queue</p>
+                               )}
+                             </div>
+
+                             <span className={cn(
+                               "px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider shrink-0",
+                               item.status === 'syncing' ? "bg-primary/15 text-primary" :
+                               item.status === 'done' ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" :
+                               item.status === 'error' ? "bg-destructive/15 text-destructive" :
+                               "bg-muted text-muted-foreground"
+                             )}>
+                               {item.status}
+                             </span>
+                           </div>
+                         ))}
+                       </div>
+
+                       {/* Footer */}
+                       {batchItems.length > 0 && (
+                         <div className="px-4 py-3 border-t border-border bg-muted/20 space-y-2">
+                           <div className="flex items-center justify-between">
+                             <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                               <span className="flex items-center gap-1">
+                                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                 {batchItems.filter(i => i.status === 'done').length} done
+                               </span>
+                               <span className="flex items-center gap-1">
+                                 <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                                 {batchItems.filter(i => i.status === 'syncing').length} syncing
+                               </span>
+                               <span className="flex items-center gap-1">
+                                 <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+                                 {batchItems.filter(i => i.status === 'error').length} failed
+                               </span>
+                             </div>
+                             <span className="text-sm font-black tabular-nums text-foreground">
+                               {Math.round((batchItems.filter(i => i.status === 'done' || i.status === 'error').length / (batchItems.length || 1)) * 100)}%
+                             </span>
+                           </div>
+                           <div className="h-1 w-full bg-muted rounded-full overflow-hidden">
+                             <div
+                               className="h-full bg-primary rounded-full transition-all duration-700 ease-out"
+                               style={{ width: `${(batchItems.filter(i => i.status === 'done' || i.status === 'error').length / (batchItems.length || 1)) * 100}%` }}
+                             />
+                           </div>
+                         </div>
+                       )}
+                     </div>
+                   )}
+                 </div>
                </div>
              )}
            </div>
@@ -795,7 +1004,8 @@ const Upload = () => {
               </div>
             )}
 
-           <div className="flex-1 overflow-y-auto min-h-0 p-4 relative no-scrollbar">
+            <div className="flex-1 overflow-y-auto min-h-0 p-4 relative no-scrollbar">
+
               {candidates.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground border-2 border-dashed border-primary/10 rounded-xl p-8 bg-background/50">
                   <div className="w-16 h-16 rounded-full bg-primary/5 flex items-center justify-center mb-4">
