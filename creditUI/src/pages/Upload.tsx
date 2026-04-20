@@ -9,6 +9,8 @@ import {
   IconCheck,
   IconX,
   IconLoader2,
+  IconEye,
+  IconEyeOff,
 } from '@tabler/icons-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -53,6 +55,7 @@ type GmailCachePayload = {
   selectedIds: string[];
   candidatePasswords: Record<string, string>;
   statementType: 'CREDIT_CARD' | 'BANK';
+  scannedAt: string;
 };
 
 type PwGateStatus = 'idle' | 'empty' | 'checking' | 'ok' | 'bad';
@@ -90,6 +93,8 @@ const Upload = () => {
   const [candidatePasswords, setCandidatePasswords] = useState<Record<string, string>>({});
   /** Per-row password validation before Gmail upload (green tick / red when wrong). */
   const [passwordGateStatus, setPasswordGateStatus] = useState<Record<string, PwGateStatus>>({});
+  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
+  const [lastScannedAt, setLastScannedAt] = useState<string | null>(null);
   const [gmailPipelineStep, setGmailPipelineStep] = useState<'idle' | 'checking_pw' | 'uploading'>('idle');
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -125,9 +130,13 @@ const Upload = () => {
     if (!cached || cached.email !== gmailStatus.email) return;
     if (cached.candidates.length === 0) return;
     gmailRestoreDone.current = true;
+
+    console.log('[Gmail Cache] Restoring from localStorage', { count: cached.candidates.length, at: cached.scannedAt });
+    
     setCandidates(cached.candidates);
     setSelectedIds(cached.selectedIds?.length ? cached.selectedIds : cached.candidates.map((c: any) => c.id));
     setCandidatePasswords(cached.candidatePasswords || {});
+    setLastScannedAt(cached.scannedAt || null);
     if (cached.statementType === 'CREDIT_CARD' || cached.statementType === 'BANK') {
       setStatementType(cached.statementType);
     }
@@ -142,8 +151,9 @@ const Upload = () => {
       selectedIds,
       candidatePasswords,
       statementType,
+      scannedAt: lastScannedAt || new Date().toISOString(),
     });
-  }, [gmailStatus?.connected, gmailStatus?.email, candidates, selectedIds, candidatePasswords, statementType]);
+  }, [gmailStatus?.connected, gmailStatus?.email, candidates, selectedIds, candidatePasswords, statementType, lastScannedAt]);
 
   useEffect(() => {
     const g = searchParams.get('gmail');
@@ -242,37 +252,77 @@ const Upload = () => {
     }
   };
 
-  const fetchGmailCandidates = async () => {
-    setGmailBusy(true);
+  const pollTimerRef = useRef<any>(null);
+
+  const checkScanStatus = useCallback(async (isManualTrigger = false) => {
     try {
       const { data } = await api.get('/api/gmail/candidates');
-      const fetched = data.candidates || [];
-      setCandidates(fetched);
-
-      const fresh = fetched
-        .filter((c: any) => c.shouldProcess && !c.alreadyProcessed && (!c.isImported || !c.existsInDb))
-        .map((c: any) => c.id);
-      setSelectedIds(fresh);
-      
-      const passes: Record<string, string> = {};
-      fetched.forEach((c: any) => {
-        passes[c.id] = c.savedPassword || 'gaur2607';
-      });
-      setCandidatePasswords(passes);
-
-      if (fetched.length === 0) {
-        toast.message('No statement PDFs found in your recent emails.');
-        clearGmailCache();
-        setCandidates([]);
-        setSelectedIds([]);
-        setCandidatePasswords({});
+      if (data.status === 'scanning') {
+         setGmailBusy(true);
+         pollTimerRef.current = setTimeout(() => checkScanStatus(isManualTrigger), 3000);
       } else {
-        toast.success(`Found ${fetched.length} potential statement(s).`);
+         setGmailBusy(false);
+         if (data.status === 'error') {
+            toast.error(data.error || 'Scan failed.');
+         } else if (data.status === 'completed' && data.candidates) {
+            const fetched = data.candidates || [];
+            
+             setCandidates((prev) => {
+               if (!isManualTrigger && prev.length > 0) return prev; // Do not clobber user's restored cache on load
+
+               const fresh = fetched
+                 .filter((c: any) => c.shouldProcess && !c.alreadyProcessed && (!c.isImported || !c.existsInDb))
+                 .map((c: any) => c.id);
+               setSelectedIds(fresh);
+               
+               const passes: Record<string, string> = {};
+               fetched.forEach((c: any) => {
+                 passes[c.id] = c.savedPassword || 'gaur2607';
+               });
+               setCandidatePasswords(passes);
+               
+               if (isManualTrigger) {
+                 const now = new Date().toISOString();
+                 setLastScannedAt(now);
+                 if (fetched.length === 0) {
+                   toast.message('No statement PDFs found in your recent emails.');
+                   clearGmailCache();
+                 } else {
+                   toast.success(`Found ${fetched.length} potential statement(s).`);
+                 }
+               }
+               setPasswordGateStatus({});
+               return fetched;
+            });
+         }
       }
-      setPasswordGateStatus({});
+    } catch {
+      setGmailBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (gmailStatus?.connected && !gmailBusy) {
+       // Only trigger an auto-check if we have NO candidates (even from cache) and not busy.
+       if (candidates.length === 0) {
+         checkScanStatus(false);
+       }
+    }
+    return () => {
+       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    }
+  }, [gmailStatus?.connected, candidates.length, checkScanStatus, gmailBusy]);
+
+  const fetchGmailCandidates = async () => {
+    setGmailBusy(true);
+    setCandidates([]);
+    setSelectedIds([]);
+    try {
+      await api.post('/api/gmail/candidates');
+      toast.info('Started scanning inbox...');
+      checkScanStatus(true);
     } catch (e: any) {
-      toast.error(e.response?.data?.message || 'Failed to fetch email candidates.');
-    } finally {
+      toast.error(e.response?.data?.message || 'Failed to start scan.');
       setGmailBusy(false);
     }
   };
@@ -479,268 +529,307 @@ const Upload = () => {
   };
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] p-8 max-w-5xl mx-auto space-y-8 animate-in fade-in duration-500">
-      <div className="space-y-4">
-        <h1 className="text-4xl font-bold tracking-tight text-primary">
+    <div className="h-[calc(100vh-4rem)] p-6 overflow-hidden animate-in fade-in duration-500 flex flex-col gap-6 max-w-[1600px] mx-auto w-full">
+      <div className="space-y-1 shrink-0">
+        <h1 className="text-3xl font-bold tracking-tight text-primary">
           Statement Upload
         </h1>
-        <p className="text-muted-foreground">
+        <p className="text-muted-foreground text-sm">
           Single pipeline: unlock PDF on backend, store unlocked file, process with Vertex Gemini 2.5 Flash, and save to your statement history.
         </p>
       </div>
 
-      <Card className="rounded-2xl p-6 bg-muted/20 border border-primary/10 space-y-4">
-        <div className="flex flex-col gap-2">
-          <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-            Statement type (manual upload &amp; Gmail sync)
-          </span>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant={statementType === 'CREDIT_CARD' ? 'default' : 'outline'}
-              onClick={() => setStatementType('CREDIT_CARD')}
-            >
-              Credit Card
-            </Button>
-            <Button
-              type="button"
-              variant={statementType === 'BANK' ? 'default' : 'outline'}
-              onClick={() => setStatementType('BANK')}
-            >
-              Bank
-            </Button>
-          </div>
-        </div>
-      </Card>
-
-      <Card className="rounded-2xl p-6 bg-muted/20 border border-primary/10 space-y-5">
-        <h2 className="text-lg font-semibold">Manual Upload</h2>
-
-        <div className="flex flex-col gap-4">
-          <label className="relative border border-dashed border-primary/20 rounded-xl p-8 text-center bg-background cursor-pointer">
-            <input type="file" className="hidden" onChange={handleFileChange} accept=".pdf" />
-            <div className="flex flex-col items-center gap-2">
-              <IconUpload size={28} className="text-primary/70" />
-              <p className="font-medium">{file ? file.name : 'Select PDF statement'}</p>
-              <p className="text-xs text-muted-foreground">Only PDF files are supported</p>
-            </div>
-          </label>
-
-          {file && (
-            <>
-              <div className="relative">
-                <input
-                  type="password"
-                  placeholder="Enter PDF password"
-                  className="flex h-11 w-full rounded-xl border border-primary/10 bg-background px-3 py-2 pl-10 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                <IconLock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              </div>
-              <Button onClick={startUpload} disabled={isUploading} className="h-11 rounded-xl gap-2">
-                <IconBrain size={16} />
-                {isUploading ? 'Processing...' : 'Upload & Process'}
-              </Button>
-            </>
-          )}
-          {errorHeader && <p className="text-xs text-red-500 font-semibold">{errorHeader}</p>}
-        </div>
-      </Card>
-
-      <Card className="rounded-2xl p-6 bg-muted/20 border border-primary/10 space-y-5">
-        <div className="flex items-start gap-3">
-          <div className="p-2 rounded-lg bg-background text-primary">
-            <IconMail size={18} />
-          </div>
-          <div className="space-y-1">
-            <h2 className="text-lg font-semibold">Gmail Sync</h2>
-            <p className="text-xs text-muted-foreground">
-              PDFs are downloaded here, unlocked in the browser (same as manual upload), then sent with <span className="font-semibold text-foreground">isUnlocked</span> so the server skips decrypt and runs the same Vertex pipeline.
-              Your last inbox scan list and passwords stay on this page until you <span className="font-semibold text-foreground">Reset</span> or{' '}
-              <span className="font-semibold text-foreground">Disconnect</span> (or until a new scan returns no PDFs).
-            </p>
-            {gmailStatus?.connected && gmailStatus.email && (
-              <p className="text-xs text-emerald-700 font-semibold">Connected: {gmailStatus.email}</p>
-            )}
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          {!gmailStatus?.connected ? (
-            <Button type="button" onClick={connectGmail} disabled={gmailBusy}>
-              {gmailBusy ? 'Opening...' : 'Connect Gmail'}
-            </Button>
-          ) : (
-            <>
-              <Button type="button" onClick={fetchGmailCandidates} disabled={gmailBusy} className="gap-2">
-                <IconRefresh size={16} className={cn(gmailBusy && 'animate-spin')} />
-                {gmailBusy ? 'Scanning...' : 'Scan Inbox'}
-              </Button>
-              <Button type="button" variant="outline" onClick={resetGmailSync} disabled={gmailBusy}>
-                Reset
-              </Button>
-              <Button type="button" variant="outline" onClick={disconnectGmail} disabled={gmailBusy} className="gap-2">
-                <IconUnlink size={14} />
-                Disconnect
-              </Button>
-            </>
-          )}
-        </div>
-
-        {candidates.length > 0 && (
-          <div className="space-y-4 border-t border-primary/10 pt-4">
-            <p className="text-[11px] text-muted-foreground font-medium">
-              Select PDFs (same layout as manual: file name → password), then process.
-            </p>
-            {candidates.map((c) => {
-              const isSelected = selectedIds.includes(c.id);
-              const lockedAsDone = Boolean(c.alreadyProcessed);
-              const classifierSkipped = c.shouldProcess === false;
-              return (
-                <div
-                  key={c.id}
-                  className={cn(
-                    'rounded-xl border border-primary/10 bg-background p-4 space-y-3 transition-opacity',
-                    (!isSelected || lockedAsDone || classifierSkipped) && 'opacity-60'
-                  )}
-                >
-                  <label className="flex items-start gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="mt-1 rounded border-primary/30"
-                      checked={isSelected}
-                      disabled={lockedAsDone || classifierSkipped}
-                      onChange={() =>
-                        setSelectedIds((prev) => (isSelected ? prev.filter((id) => id !== c.id) : [...prev, c.id]))
-                      }
-                    />
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <p className="text-sm font-medium break-all">{c.filename}</p>
-                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                        <span>{c.bank}</span>
-                        {c.parsedPeriod?.from && c.parsedPeriod?.to && (
-                          <span>· {c.parsedPeriod.from} to {c.parsedPeriod.to}</span>
-                        )}
-                        {lockedAsDone && (
-                          <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-100 font-semibold">
-                            already_processed
-                          </span>
-                        )}
-                        {classifierSkipped && !lockedAsDone && (
-                          <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 font-semibold">
-                            skipped
-                          </span>
-                        )}
-                      </div>
-                      {c.classificationReason && (
-                        <p className="text-[10px] text-muted-foreground">{c.classificationReason}</p>
-                      )}
-                    </div>
-                  </label>
-                  {isSelected && !lockedAsDone && !classifierSkipped && (
-                    <div className="pl-7 space-y-3">
-                      {c.encrypted !== false && (
-                        <>
-                          {c.passwordHint?.hasPasswordHint ? (
-                            <div className="rounded-lg border border-amber-200 bg-amber-50/90 p-3 space-y-2 text-xs text-amber-950 shadow-sm">
-                              <div className="flex items-center gap-2 font-semibold">
-                                <IconLock size={14} className="text-amber-800 shrink-0" />
-                                <span>This PDF is password protected</span>
-                              </div>
-                              {c.passwordHint.userMessage ? (
-                                <p className="leading-relaxed font-medium">{c.passwordHint.userMessage}</p>
-                              ) : c.passwordHint.passwordRule ? (
-                                <p>
-                                  <span className="font-semibold">Hint:</span> {c.passwordHint.passwordRule}
-                                </p>
-                              ) : null}
-                              {c.passwordHint.example ? (
-                                <p className="text-amber-900/90">
-                                  <span className="font-semibold">Example:</span> {c.passwordHint.example}
-                                </p>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <p className="text-[11px] text-muted-foreground flex items-start gap-2">
-                              <IconLock size={14} className="shrink-0 mt-0.5" />
-                              <span>
-                                This PDF is password protected. We couldn&apos;t find a password hint in the email body — enter the password your bank uses (often DOB or name-based).
-                              </span>
-                            </p>
-                          )}
-                        </>
-                      )}
-                      <div className="flex items-stretch gap-2">
-                        <div className="relative flex-1 min-w-0">
-                          <input
-                            type="password"
-                            placeholder={c.encrypted === false ? 'Password (optional if not encrypted)' : 'Enter PDF password'}
-                            className={cn(
-                              'flex h-11 w-full rounded-xl border bg-background px-3 py-2 pl-10 pr-3 text-sm focus-visible:outline-none focus-visible:ring-2',
-                              passwordGateStatus[c.id] === 'empty' || passwordGateStatus[c.id] === 'bad'
-                                ? 'border-red-400 focus-visible:ring-red-200 ring-2 ring-red-100'
-                                : passwordGateStatus[c.id] === 'ok'
-                                  ? 'border-emerald-400 focus-visible:ring-emerald-200 ring-2 ring-emerald-50'
-                                  : 'border-primary/10 focus-visible:ring-primary/20'
-                            )}
-                            value={candidatePasswords[c.id] || ''}
-                            onChange={(e) => {
-                              setCandidatePasswords((prev) => ({ ...prev, [c.id]: e.target.value }));
-                              setPasswordGateStatus((prev) => ({ ...prev, [c.id]: 'idle' }));
-                            }}
-                          />
-                          <IconLock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-                        </div>
-                        <div
-                          className={cn(
-                            'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border bg-muted/30',
-                            passwordGateStatus[c.id] === 'empty' || passwordGateStatus[c.id] === 'bad'
-                              ? 'border-red-300 bg-red-50/80'
-                              : passwordGateStatus[c.id] === 'ok'
-                                ? 'border-emerald-200 bg-emerald-50/80'
-                                : 'border-transparent'
-                          )}
-                          title={
-                            passwordGateStatus[c.id] === 'ok'
-                              ? 'Password opens this PDF'
-                              : passwordGateStatus[c.id] === 'bad'
-                                ? 'Password does not open this PDF'
-                                : passwordGateStatus[c.id] === 'empty'
-                                  ? 'Password required'
-                                  : ''
-                          }
-                        >
-                          {passwordGateStatus[c.id] === 'checking' && (
-                            <IconLoader2 size={18} className="animate-spin text-primary" />
-                          )}
-                          {passwordGateStatus[c.id] === 'ok' && <IconCheck size={18} className="text-emerald-600" strokeWidth={2.5} />}
-                          {(passwordGateStatus[c.id] === 'bad' || passwordGateStatus[c.id] === 'empty') && (
-                            <IconX size={18} className="text-red-600" strokeWidth={2.5} />
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
+      <div className="flex flex-1 gap-6 min-h-0">
+        {/* LEFT COLUMN: Controls */}
+        <div className="w-1/3 min-w-[360px] max-w-[420px] flex flex-col gap-6 overflow-y-auto pr-2 pb-4 style-scroll">
+          <Card className="rounded-2xl p-5 bg-muted/20 border border-primary/10 space-y-4 shadow-sm">
+             {/* Statement type */}
+             <div className="flex flex-col gap-2">
+                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                  Statement type
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant={statementType === 'CREDIT_CARD' ? 'default' : 'outline'}
+                    onClick={() => setStatementType('CREDIT_CARD')}
+                  >
+                    Credit Card
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={statementType === 'BANK' ? 'default' : 'outline'}
+                    onClick={() => setStatementType('BANK')}
+                  >
+                    Bank
+                  </Button>
                 </div>
-              );
-            })}
-            <Button
-              type="button"
-              onClick={syncSelectedCandidates}
-              disabled={gmailBusy || selectedIds.length === 0}
-              className="w-full h-11 rounded-xl gap-2"
-            >
-              <IconBrain size={16} />
-              {gmailBusy && gmailPipelineStep === 'checking_pw'
-                ? 'Checking passwords...'
-                : gmailBusy && gmailPipelineStep === 'uploading'
-                  ? 'Processing...'
-                  : `Process selected (${selectedIds.length})`}
-            </Button>
-          </div>
-        )}
-      </Card>
+             </div>
+          </Card>
+
+          <Card className="rounded-2xl p-5 bg-muted/20 border border-primary/10 space-y-4 shadow-sm">
+             <h2 className="text-lg font-semibold">Manual Upload</h2>
+             <div className="flex flex-col gap-4">
+                <label className="relative border border-dashed border-primary/20 rounded-xl p-6 text-center bg-background cursor-pointer hover:bg-muted/10 transition-colors">
+                  <input type="file" className="hidden" onChange={handleFileChange} accept=".pdf" />
+                  <div className="flex flex-col items-center gap-2">
+                    <IconUpload size={24} className="text-primary/70" />
+                    <p className="font-medium text-sm">{file ? file.name : 'Select PDF statement'}</p>
+                  </div>
+                </label>
+
+                {file && (
+                  <div className="space-y-3 animate-in fade-in slide-in-from-top-2">
+                    <div className="relative">
+                      <input
+                        type="password"
+                        placeholder="Enter PDF password"
+                        className="flex h-10 w-full rounded-xl border border-primary/10 bg-background px-3 py-2 pl-9 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                      />
+                      <IconLock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    </div>
+                    <Button onClick={startUpload} disabled={isUploading} className="h-10 rounded-xl gap-2 w-full">
+                      <IconBrain size={16} />
+                      {isUploading ? 'Processing...' : 'Upload & Process'}
+                    </Button>
+                  </div>
+                )}
+                {errorHeader && <p className="text-xs text-red-500 font-semibold">{errorHeader}</p>}
+             </div>
+          </Card>
+
+          <Card className="rounded-2xl p-5 bg-muted/20 border border-primary/10 space-y-4 shadow-sm">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-background border border-primary/5 text-primary shrink-0">
+                <IconMail size={18} />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold">Gmail Sync</h2>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  PDFs are downloaded here, unlocked locally, then sent to the Vertex pipeline.
+                </p>
+                {gmailStatus?.connected && gmailStatus.email && (
+                  <p className="text-[11px] text-emerald-700 font-semibold mt-1 bg-emerald-50 inline-block px-1.5 py-0.5 rounded">
+                    Connected: {gmailStatus.email}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2 pt-1">
+              {!gmailStatus?.connected ? (
+                <Button type="button" onClick={connectGmail} disabled={gmailBusy} className="h-9 text-xs">
+                  {gmailBusy ? 'Opening...' : 'Connect Gmail'}
+                </Button>
+              ) : (
+                <>
+                  <Button type="button" onClick={fetchGmailCandidates} disabled={gmailBusy} className="gap-2 h-9 text-xs">
+                    <IconRefresh size={14} className={cn(gmailBusy && 'animate-spin')} />
+                    {gmailBusy ? 'Scanning...' : 'Scan Inbox'}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={resetGmailSync} disabled={gmailBusy} className="h-9 text-xs bg-background">
+                    Reset
+                  </Button>
+                  <Button type="button" variant="outline" onClick={disconnectGmail} disabled={gmailBusy} className="gap-1.5 h-9 text-xs bg-background">
+                    <IconUnlink size={13} />
+                    Disconnect
+                  </Button>
+                </>
+              )}
+            </div>
+          </Card>
+        </div>
+
+        {/* RIGHT COLUMN: Table View */}
+        <div className="flex-1 flex flex-col min-h-0 border border-primary/10 rounded-2xl bg-muted/10 overflow-hidden shadow-sm">
+           <div className="flex items-center justify-between p-4 border-b border-primary/10 bg-background/50 shrink-0">
+             <div>
+               <div className="flex items-center gap-2">
+                 <h2 className="text-base font-semibold">Gmail Sync Candidates</h2>
+                 {lastScannedAt && (
+                   <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded border border-primary/5 uppercase tracking-tighter font-medium">
+                     Last scanned: {new Date(lastScannedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                   </span>
+                 )}
+               </div>
+               <p className="text-xs text-muted-foreground">Select PDFs and enter passwords to process</p>
+             </div>
+             {candidates.length > 0 && (
+               <div className="flex items-center gap-3 shrink-0">
+                 <div className="text-xs bg-primary/5 text-primary px-2.5 py-1 rounded-full font-medium">
+                   {selectedIds.length} Selected
+                 </div>
+                 <Button
+                   type="button"
+                   onClick={syncSelectedCandidates}
+                   disabled={gmailBusy || selectedIds.length === 0}
+                   className="h-9 rounded-xl gap-2 font-medium"
+                 >
+                   <IconBrain size={16} />
+                   {gmailBusy && gmailPipelineStep === 'checking_pw'
+                     ? 'Checking pw...'
+                     : gmailBusy && gmailPipelineStep === 'uploading'
+                       ? 'Processing...'
+                       : `Process Selected`}
+                 </Button>
+               </div>
+             )}
+           </div>
+
+           <div className="flex-1 overflow-y-auto min-h-0 p-4 relative">
+              {candidates.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground border-2 border-dashed border-primary/10 rounded-xl p-8 bg-background/50">
+                  <div className="w-16 h-16 rounded-full bg-primary/5 flex items-center justify-center mb-4">
+                    <IconMail size={28} className="text-primary/40" />
+                  </div>
+                  <p className="font-semibold text-foreground/80 text-lg">No candidates loaded</p>
+                  <p className="text-sm mt-1 max-w-sm">Connect Gmail and click Scan Inbox to securely find and parse bank statements from your emails.</p>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-primary/10 bg-background overflow-hidden relative shadow-sm">
+                  <table className="w-full text-left text-sm whitespace-nowrap">
+                    <thead className="bg-muted/50 text-[11px] text-muted-foreground uppercase tracking-wide sticky top-0 z-10 box-border border-b border-primary/10">
+                      <tr>
+                        <th className="p-3 w-10"></th>
+                        <th className="p-3 font-semibold">Document</th>
+                        <th className="p-3 font-semibold">Bank</th>
+                        <th className="p-3 font-semibold">Password & Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-primary/5">
+                      {candidates.map((c) => {
+                        const isSelected = selectedIds.includes(c.id);
+                        const lockedAsDone = Boolean(c.alreadyProcessed);
+                        const classifierSkipped = c.shouldProcess === false;
+                        
+                        return (
+                          <tr 
+                            key={c.id} 
+                            className={cn(
+                              "hover:bg-muted/30 transition-colors group",
+                              (!isSelected || lockedAsDone || classifierSkipped) && 'opacity-60 bg-muted/10'
+                            )}
+                          >
+                            <td className="p-3 align-top">
+                               <input
+                                 type="checkbox"
+                                 className="rounded border-primary/30 mt-1 cursor-pointer w-4 h-4 text-primary"
+                                 checked={isSelected}
+                                 disabled={lockedAsDone || classifierSkipped}
+                                 onChange={() =>
+                                   setSelectedIds((prev) => (isSelected ? prev.filter((id) => id !== c.id) : [...prev, c.id]))
+                                 }
+                               />
+                            </td>
+                            <td className="p-3 align-top max-w-[280px] whitespace-normal">
+                               <p className="font-medium break-words leading-tight">{c.filename}</p>
+                               {c.parsedPeriod?.from && c.parsedPeriod?.to && (
+                                  <p className="text-[11px] text-muted-foreground mt-2 flex items-center gap-1.5 font-medium">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>
+                                    {c.parsedPeriod.from} <span className="opacity-40 font-normal">to</span> {c.parsedPeriod.to}
+                                  </p>
+                               )}
+                            </td>
+                            <td className="p-3 align-top whitespace-normal min-w-[140px]">
+                               <div className="flex flex-col items-start gap-1.5">
+                                 <span className="text-[11px] bg-primary/5 px-2 py-0.5 rounded border border-primary/10 font-bold tracking-wide">{c.bank}</span>
+                                 {lockedAsDone && (
+                                    <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 font-semibold tracking-wider uppercase">
+                                      Processed
+                                    </span>
+                                 )}
+                                 {classifierSkipped && !lockedAsDone && (
+                                    <span className="text-[10px] text-slate-600 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200 font-semibold tracking-wider uppercase">
+                                      Skipped
+                                    </span>
+                                 )}
+                                 {c.classificationReason && (
+                                   <p className="text-[10px] text-muted-foreground leading-tight max-w-[150px] mt-0.5">{c.classificationReason}</p>
+                                 )}
+                               </div>
+                            </td>
+                            <td className="p-3 align-top w-[360px] whitespace-normal">
+                               {isSelected && !lockedAsDone && !classifierSkipped && (
+                                 <div className="flex flex-col gap-2.5 animate-in fade-in zoom-in-95 duration-200">
+                                   {c.encrypted !== false && (
+                                     <>
+                                       {c.passwordHint?.hasPasswordHint ? (
+                                         <div className="rounded border border-amber-200 bg-amber-50/90 py-1.5 px-2.5 text-[11px] text-amber-950 shadow-[inset_0_1px_2px_rgba(0,0,0,0.02)]">
+                                            {c.passwordHint.userMessage ? (
+                                              <p className="font-medium leading-snug">{c.passwordHint.userMessage}</p>
+                                            ) : (
+                                              <p><span className="font-bold">Hint:</span> {c.passwordHint.passwordRule}</p>
+                                            )}
+                                         </div>
+                                       ) : (
+                                         <p className="text-[10px] text-muted-foreground flex items-start gap-1.5 leading-tight">
+                                           <IconLock size={12} className="shrink-0 mt-0.5" />
+                                           <span>Password protected. No hint found. Enter your standard bank password.</span>
+                                         </p>
+                                       )}
+                                     </>
+                                   )}
+                                   <div className="flex items-center gap-2">
+                                      <div className="relative flex-1 group/input">
+                                        <input
+                                          type={showPasswords[c.id] ? 'text' : 'password'}
+                                          placeholder={c.encrypted === false ? 'Optional password' : 'PDF Password'}
+                                          className={cn(
+                                            'flex h-9 w-full rounded-lg border bg-background px-3 py-1 pr-9 text-xs focus-visible:outline-none focus-visible:ring-2 transition-all',
+                                            passwordGateStatus[c.id] === 'empty' || passwordGateStatus[c.id] === 'bad'
+                                              ? 'border-red-400 focus-visible:ring-red-200 ring-2 ring-red-100'
+                                              : passwordGateStatus[c.id] === 'ok'
+                                                ? 'border-emerald-400 focus-visible:ring-emerald-200 ring-2 ring-emerald-50'
+                                                : 'border-primary/20 focus-visible:ring-primary/20 hover:border-primary/40'
+                                          )}
+                                          value={candidatePasswords[c.id] || ''}
+                                          onChange={(e) => {
+                                            setCandidatePasswords((prev) => ({ ...prev, [c.id]: e.target.value }));
+                                            setPasswordGateStatus((prev) => ({ ...prev, [c.id]: 'idle' }));
+                                          }}
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => setShowPasswords((prev) => ({ ...prev, [c.id]: !prev[c.id] }))}
+                                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-primary transition-colors duration-200"
+                                        >
+                                          {showPasswords[c.id] ? <IconEyeOff size={14} /> : <IconEye size={14} />}
+                                        </button>
+                                      </div>
+                                      <div
+                                        className={cn(
+                                          'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border bg-muted/20 transition-all duration-300',
+                                          passwordGateStatus[c.id] === 'empty' || passwordGateStatus[c.id] === 'bad'
+                                            ? 'border-red-300 bg-red-50 text-red-500 scale-105'
+                                            : passwordGateStatus[c.id] === 'ok'
+                                              ? 'border-emerald-200 bg-emerald-50 text-emerald-600 shadow-sm scale-105'
+                                              : 'border-transparent text-muted-foreground scale-100'
+                                        )}
+                                      >
+                                        {passwordGateStatus[c.id] === 'checking' && (
+                                          <IconLoader2 size={16} className="animate-spin text-primary" />
+                                        )}
+                                        {passwordGateStatus[c.id] === 'ok' && <IconCheck size={18} strokeWidth={3} />}
+                                        {(passwordGateStatus[c.id] === 'bad' || passwordGateStatus[c.id] === 'empty') && (
+                                          <IconX size={16} strokeWidth={2.5} />
+                                        )}
+                                      </div>
+                                   </div>
+                                 </div>
+                               )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+           </div>
+        </div>
+      </div>
     </div>
   );
 };

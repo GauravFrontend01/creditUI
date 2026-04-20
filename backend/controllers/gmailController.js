@@ -381,15 +381,15 @@ exports.disconnectGmail = async (req, res) => {
   }
 };
 
-// @route   GET /api/gmail/candidates
-// @access  Private
-exports.listGmailCandidates = async (req, res) => {
+async function runBackgroundCandidateScan(userId) {
   const startedAt = Date.now();
   try {
-    const user = await User.findById(req.user._id).select('+gmailRefreshToken');
+    const user = await User.findById(userId).select('+gmailRefreshToken');
     if (!user?.gmailRefreshToken) {
-      return res.status(400).json({ message: 'Connect Gmail first' });
+      throw new Error('Connect Gmail first');
     }
+
+    await User.findByIdAndUpdate(userId, { gmailScanStatus: 'scanning', gmailScanError: '' });
 
     const maxResults = 12;
     const oauth2Client = createOAuth2Client();
@@ -402,7 +402,7 @@ exports.listGmailCandidates = async (req, res) => {
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     const q = defaultGmailQuery();
     console.log(
-      `[Gmail Candidates] start user=${req.user._id} query="${q}" maxResults=${maxResults}`
+      `[Gmail Candidates] start user=${userId} query="${q}" maxResults=${maxResults}`
     );
     const listRes = await gmail.users.messages.list({ userId: 'me', q, maxResults });
 
@@ -412,7 +412,7 @@ exports.listGmailCandidates = async (req, res) => {
     );
     const imported = new Set(user.gmailImportedMessageIds || []);
     const existingStatements = await Statement.find({
-      user: user._id,
+      user: userId,
       isUserRejected: { $ne: true },
     })
       .select('accountNumber statementPeriod')
@@ -484,7 +484,7 @@ exports.listGmailCandidates = async (req, res) => {
             alreadyProcessedReason: alreadyProcessed
               ? `Statement already exists for account hint ${accountHint} and period ${dateRange.from} to ${dateRange.to}`
               : '',
-            existsInDb: isImported ? await Statement.exists({ user: user._id, gmailMessageId: messageId }) : false,
+            existsInDb: isImported ? await Statement.exists({ user: userId, gmailMessageId: messageId }) : false,
           });
         }
       } catch (e) {
@@ -555,10 +555,57 @@ exports.listGmailCandidates = async (req, res) => {
     console.log(
       `[Gmail Candidates] response candidates=${enriched.length} elapsedMs=${Date.now() - startedAt}`
     );
-    res.json({ candidates: enriched });
+    
+    await User.findByIdAndUpdate(userId, {
+       gmailScanStatus: 'completed',
+       gmailScanResult: enriched,
+    });
+  } catch (error) {
+    console.error('runBackgroundCandidateScan failed', error);
+    await User.findByIdAndUpdate(userId, {
+       gmailScanStatus: 'error',
+       gmailScanError: error?.message || 'Unknown error occurred during background scan',
+    });
+  }
+}
+
+// @route   POST /api/gmail/candidates
+// @access  Private
+exports.startGmailCandidatesScan = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('+gmailRefreshToken');
+    if (!user?.gmailRefreshToken) {
+      return res.status(400).json({ message: 'Connect Gmail first' });
+    }
+    
+    // Check if a scan is already running to avoid running multiple scans concurrently
+    if (user.gmailScanStatus === 'scanning') {
+      return res.json({ message: 'Scan already in progress', status: 'scanning' });
+    }
+
+    // Fire and forget background function
+    runBackgroundCandidateScan(req.user._id).catch(console.error);
+    
+    res.json({ message: 'Scan started', status: 'scanning' });
+  } catch (error) {
+    console.error('startGmailCandidatesScan', error);
+    res.status(500).json({ message: 'Failed to start scan' });
+  }
+};
+
+// @route   GET /api/gmail/candidates
+// @access  Private
+exports.listGmailCandidates = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+    res.json({
+      status: user.gmailScanStatus || 'idle',
+      candidates: user.gmailScanResult || [],
+      error: user.gmailScanStatus === 'error' ? user.gmailScanError : ''
+    });
   } catch (error) {
     console.error('listGmailCandidates', error);
-    res.status(500).json({ message: 'Failed to fetch messages' });
+    res.status(500).json({ message: 'Failed to fetch scan status' });
   }
 };
 
