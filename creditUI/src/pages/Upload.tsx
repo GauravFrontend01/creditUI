@@ -415,17 +415,13 @@ const Upload = () => {
     }
   }, [candidatePasswords]);
 
+  // Cleanup poll timer on unmount
   useEffect(() => {
-    if (gmailStatus?.connected && !gmailBusy) {
-       // Only trigger an auto-check if we have NO candidates (even from cache) and not busy.
-       if (candidates.length === 0) {
-         checkScanStatus(false);
-       }
-    }
     return () => {
-       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    }
-  }, [gmailStatus?.connected, candidates.length, checkScanStatus, gmailBusy]);
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, []);
+
 
   const fetchGmailCandidates = async () => {
     setGmailBusy(true);
@@ -639,8 +635,7 @@ const Upload = () => {
 
       const okCount = results.filter(r => r.kind === 'ok').length;
       if (okCount > 0) {
-        toast.success(`Batch complete: ${okCount} statements processed.`);
-        await fetchGmailCandidates();
+        toast.success(`Batch complete: ${okCount} statement(s) processed.`);
       }
       await refreshGmailStatus();
     } catch (e: unknown) {
