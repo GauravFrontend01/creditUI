@@ -32,18 +32,32 @@ if (!(Map.prototype as any).getOrInsertComputed) {
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
-/** Quick open test — same as first step of unlock, without re-rendering pages. */
-async function canOpenPdfWithPassword(file: File, password: string, treatAsEncrypted: boolean): Promise<boolean> {
+/** Quick open test — tries original and uppercase variant (some banks require caps). Returns the working password string or null. */
+async function canOpenPdfWithPassword(file: File, password: string, treatAsEncrypted: boolean): Promise<string | null> {
+  const buf = await file.arrayBuffer();
+  const pOriginal = password.trim();
+  const pUpper = pOriginal.toUpperCase();
+  
+  // Try original first
   try {
-    const buf = await file.arrayBuffer();
-    const p = password.trim();
     await pdfjsLib.getDocument({
       data: buf,
-      password: treatAsEncrypted ? p : p || undefined,
+      password: treatAsEncrypted ? pOriginal : pOriginal || undefined,
     }).promise;
-    return true;
-  } catch {
-    return false;
+    return pOriginal;
+  } catch (e) {
+    if (!treatAsEncrypted || pOriginal === pUpper) return null;
+    
+    // Try uppercase if different
+    try {
+      await pdfjsLib.getDocument({
+        data: buf,
+        password: pUpper,
+      }).promise;
+      return pUpper;
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -183,13 +197,19 @@ const Upload = () => {
 
     try {
       const effectivePassword = password.trim() || 'gaur2607';
-      console.log(`[Frontend Unlock] Using password "${effectivePassword}" for ${file.name}`);
+      console.log(`[Frontend Unlock] Attempting unlock for ${file.name}`);
 
-      const unlockedFile = await unlockPdfInBrowser(file, effectivePassword);
+      const { file: unlockedFile, workingPassword } = await unlockPdfInBrowser(file, effectivePassword);
+      
+      if (workingPassword && workingPassword !== effectivePassword) {
+         setPassword(workingPassword); // Sync UI with the working variant
+      }
+
       const formData = new FormData();
       formData.append('pdf', unlockedFile);
       formData.append('statementType', statementType);
       formData.append('isUnlocked', 'true');
+      formData.append('pdfPassword', workingPassword); // Send working password to be saved on backend request if needed
 
       const { data } = await api.post('/api/statements', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -207,10 +227,29 @@ const Upload = () => {
 
   const unlockPdfInBrowser = async (sourceFile: File, sourcePassword: string) => {
     const buffer = await sourceFile.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({
-      data: buffer,
-      password: sourcePassword || undefined,
-    }).promise;
+    const pTrim = sourcePassword.trim();
+    const variants = [pTrim, pTrim.toUpperCase()];
+    const uniqueVariants = Array.from(new Set(variants.filter(v => v || sourcePassword === '')));
+
+    let pdf: any = null;
+    let workingPassword = '';
+
+    for (const p of uniqueVariants) {
+      try {
+        pdf = await pdfjsLib.getDocument({
+          data: buffer,
+          password: p || undefined,
+        }).promise;
+        workingPassword = p;
+        break;
+      } catch {
+        continue;
+      }
+    }
+
+    if (!pdf) {
+      throw new Error('Incorrect password: PDF could not be opened.');
+    }
 
     const rebuilt = await PDFDocument.create();
     for (let i = 1; i <= pdf.numPages; i += 1) {
@@ -235,7 +274,10 @@ const Upload = () => {
       unlockedBytes.byteOffset,
       unlockedBytes.byteOffset + unlockedBytes.byteLength
     ) as ArrayBuffer;
-    return new File([unlockedArrayBuffer], sourceFile.name, { type: 'application/pdf' });
+    return { 
+      file: new File([unlockedArrayBuffer], sourceFile.name, { type: 'application/pdf' }),
+      workingPassword
+    };
   };
 
   const connectGmail = async () => {
@@ -404,9 +446,15 @@ const Upload = () => {
           setPasswordGateStatus((prev) => ({ ...prev, [c.id]: 'checking' }));
           try {
             const file = await downloadGmailPdfAsFile(c);
-            const opens = await canOpenPdfWithPassword(file, pwd, enc);
-            const st: PwGateStatus = opens ? 'ok' : 'bad';
-            return [c.id, st] as const;
+            const workingPwd = await canOpenPdfWithPassword(file, pwd, enc);
+            if (workingPwd) {
+              if (workingPwd !== pwd) {
+                 // Update state so the user sees which variant worked + we use it in the next step
+                 setCandidatePasswords((prev) => ({ ...prev, [c.id]: workingPwd }));
+              }
+              return [c.id, 'ok' as PwGateStatus] as const;
+            }
+            return [c.id, 'bad' as PwGateStatus] as const;
           } catch {
             return [c.id, 'bad' as PwGateStatus] as const;
           }
@@ -430,13 +478,15 @@ const Upload = () => {
           const effectivePassword = enc ? pwd : pwd || 'gaur2607';
           try {
             const file = await downloadGmailPdfAsFile(c);
-            const unlockedFile = await unlockPdfInBrowser(file, effectivePassword);
+            const { file: unlockedFileResult } = await unlockPdfInBrowser(file, effectivePassword);
 
             const formData = new FormData();
-            formData.append('pdf', unlockedFile);
+            formData.append('pdf', unlockedFileResult);
             formData.append('statementType', statementType);
             formData.append('isUnlocked', 'true');
             formData.append('gmailMessageId', c.messageId);
+            formData.append('pdfPassword', effectivePassword); // Send the working password to be saved
+            formData.append('bankLabel', c.bank); // Send the bank label for password mapping
             if (c.parsedPeriod?.from) formData.append('emailPeriodFrom', String(c.parsedPeriod.from));
             if (c.parsedPeriod?.to) formData.append('emailPeriodTo', String(c.parsedPeriod.to));
             if (c.accountHint) formData.append('emailAccountHint', String(c.accountHint));

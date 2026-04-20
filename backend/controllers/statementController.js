@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Statement = require('../models/Statement');
+const User = require('../models/User');
 const {
   processStatementPdf,
   refreshSignedUrl,
@@ -132,6 +133,28 @@ exports.createStatement = async (req, res) => {
       isPreUnlocked: isUnlocked,
       gmailMessageId,
     });
+
+    // Remember the working password for this bank if provided
+    const bankLabel = String(req.body.bankLabel || '').trim();
+    const finalPwd = String(pdfPassword || req.body.pdfPassword || '').trim();
+    if (finalPwd && bankLabel && bankLabel !== 'Other') {
+      try {
+        const user = await User.findById(req.user._id).select('+gmailRefreshToken');
+        if (user) {
+          const existingIdx = user.bankPasswords.findIndex(p => p.label === bankLabel);
+          if (existingIdx >= 0) {
+            user.bankPasswords[existingIdx].password = finalPwd;
+            user.bankPasswords[existingIdx].updatedAt = new Date();
+          } else {
+            user.bankPasswords.push({ label: bankLabel, password: finalPwd });
+          }
+          await user.save();
+          console.log(`[Sync/Create] Saved/Updated bank password for label="${bankLabel}"`);
+        }
+      } catch (saveErr) {
+        console.error('[Sync/Create] Failed to save bank password', saveErr.message);
+      }
+    }
 
     const txCount = Array.isArray(statement.transactions) ? statement.transactions.length : 0;
     console.log(
