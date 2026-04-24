@@ -96,12 +96,20 @@ exports.createStatement = async (req, res) => {
     const batchIndex = Number(req.body.batchIndex) || 0;
     const batchTotal = Number(req.body.batchTotal) || 0;
 
-    if (!pdfFile) return res.status(400).json({ message: 'No PDF file uploaded' });
-    if (!isUnlocked && !pdfPassword) return res.status(400).json({ message: 'PDF password is required' });
+    if (!pdfFile) {
+      console.error('[Sync/Create] No PDF file received in request.');
+      return res.status(400).json({ message: 'No PDF file uploaded' });
+    }
+    if (!isUnlocked && !pdfPassword) {
+      console.error('[Sync/Create] Password missing for locked PDF.');
+      return res.status(400).json({ message: 'PDF password is required' });
+    }
 
     console.log(
-      `[Sync/Create] start user=${req.user._id} file="${pdfFile.originalname}" size=${pdfFile.size || 0} unlocked=${isUnlocked} source=${gmailMessageId ? 'gmail' : 'manual'} messageId=${gmailMessageId || '-'}`
+      `[Sync/Create] start user=${req.user._id} file="${pdfFile.originalname}" size=${pdfFile.size || 0} type=${statementType} unlocked=${isUnlocked} source=${gmailMessageId ? 'gmail' : 'manual'} messageId=${gmailMessageId || '-'}`
     );
+    console.log('[Sync/Create] Request Body Keys:', Object.keys(req.body));
+
 
     if (gmailMessageId && emailPeriodFrom && emailPeriodTo && emailAccountHint) {
       console.log(

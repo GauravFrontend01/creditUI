@@ -8,19 +8,24 @@ function tryDecryptWithQpdf(buffer, password) {
   const tmpIn = path.join(os.tmpdir(), `enc-${Date.now()}-${Math.random().toString(16).slice(2)}.pdf`);
   const tmpOut = path.join(os.tmpdir(), `dec-${Date.now()}-${Math.random().toString(16).slice(2)}.pdf`);
   try {
+    console.log(`[PDF Service] Writing buffer to temp file: ${tmpIn}`);
     fs.writeFileSync(tmpIn, buffer);
+    console.log(`[PDF Service] Executing qpdf...`);
     execFileSync('qpdf', ['--password', password, '--decrypt', tmpIn, tmpOut], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    console.log(`[PDF Service] qpdf success, reading output: ${tmpOut}`);
     const out = fs.readFileSync(tmpOut);
     return { buffer: out, isUnlocked: true };
   } catch (e) {
     const stderr = String(e?.stderr || e?.message || '');
     const lower = stderr.toLowerCase();
+    console.error(`[PDF Service] qpdf error: ${stderr}`);
     if (lower.includes('invalid password') || lower.includes('incorrect password')) {
       throw new Error('Incorrect password for PDF decryption.');
     }
     if (lower.includes('enoent') || lower.includes('not found')) {
+      console.warn(`[PDF Service] CRITICAL: qpdf is NOT installed on this system.`);
       return { buffer, isUnlocked: false, warning: 'qpdf is not installed (needed for some AES-encrypted PDFs).' };
     }
     return { buffer, isUnlocked: false, warning: `qpdf fallback failed: ${stderr}` };
