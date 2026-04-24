@@ -410,9 +410,9 @@ export default function StatementsList() {
         if (!bankMatch && !accMatch && !periodMatch) return
       }
 
-      const bankKey = s.bankName?.val || "Unknown Bank"
-      const accKey = s.accountNumber?.val || "N/A"
-      const key = `${bankKey}-${accKey}`
+      const bankKey = (s.bankName?.val || "Unknown Bank").trim()
+      const accKey = (s.accountNumber?.val || "N/A").trim()
+      const key = `${bankKey.toUpperCase()}-${accKey.toUpperCase()}`
 
       if (!groups[key]) {
         groups[key] = { 
@@ -432,9 +432,9 @@ export default function StatementsList() {
     const groups: Record<string, { name: string; accNum: string; items: Statement[] }> = {}
 
     statements.forEach((s) => {
-      const bankKey = s.bankName?.val || "Unknown Bank"
-      const accKey = s.accountNumber?.val || "N/A"
-      const key = `${bankKey}-${accKey}`
+      const bankKey = (s.bankName?.val || "Unknown Bank").trim()
+      const accKey = (s.accountNumber?.val || "N/A").trim()
+      const key = `${bankKey.toUpperCase()}-${accKey.toUpperCase()}`
 
       if (!groups[key]) {
         groups[key] = {

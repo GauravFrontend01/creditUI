@@ -2,8 +2,13 @@ const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenAI } = require('@google/genai');
 const Statement = require('../models/Statement');
+const User = require('../models/User');
 const { decryptPdf } = require('./pdfService');
 
+console.log('[Pipeline] Initializing Supabase client...');
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
+  console.error('[Pipeline] CRITICAL: SUPABASE_URL or SUPABASE_SERVICE_KEY is missing from environment variables!');
+}
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
@@ -17,41 +22,38 @@ Rules:
 1) Include ALL transaction rows (do not skip any row).
 2) Detect statementType as either "BANK" or "CREDIT_CARD".
 3) For each transaction, return:
-   - date
-   - description
-   - merchantName
-   - amount (numeric, positive)
-   - deposit (numeric or null)
-   - withdrawal (numeric or null)
-   - balance (numeric or null)
+   - date, description, merchantName, amount (numeric, positive)
+   - deposit/withdrawal/balance (numeric or null)
    - type ("Credit" or "Debit")
-   - category (one of: Transfer, EMI, Salary, Refund, ATM, Cash, Card Payment, Shopping, Travel, Utility, Food, Health, Education, Investment, Fee, Interest, Tax, Subscription, Rent, Insurance, Other)
-   - box: [top, left, bottom, right] normalized in 0..1000
-   - page: 1-indexed page number
+   - category (e.g., Food, Shopping, Transfer)
+   - box: [top, left, bottom, right] normalized in 0..1000, page: 1-indexed
 4) Return meaningful numeric fields needed for validation:
-   - openingBalance, closingBalance, totalCredits, totalDebits, totalDeposits, totalWithdrawals
+   - BANK: openingBalance, closingBalance, totalDeposits, totalWithdrawals
+   - CREDIT_CARD: previousBalance, outstandingTotal, minPaymentDue, creditLimit, availableLimit
 5) Also return:
    - bankName, accountNumber, accountHolder, currency, statementDate
-     (for these fields prefer object format: { val, box, page })
    - statementPeriod: { from, to }
+   - paymentDueDate (for credit cards)
    - reconciliationSummary: { openingBalance, closingBalance, totalDebits, totalCredits, transactionCount }
-   - summary (short text)
 
-Output JSON object schema:
+Output JSON object schema (use object format { val, box, page } for all vital fields):
 {
   "statementType": "BANK" | "CREDIT_CARD",
-  "bankName": string,
-  "accountNumber": string,
-  "accountHolder": string,
+  "bankName": { "val": string, "box": [], "page": 0 },
+  "accountNumber": { "val": string, "box": [], "page": 0 },
+  "accountHolder": { "val": string, "box": [], "page": 0 },
   "currency": string,
-  "statementDate": string,
-  "statementPeriod": { "from": string, "to": string },
-  "openingBalance": number | null,
-  "closingBalance": number | null,
+  "statementDate": { "val": string, "box": [], "page": 0 },
+  "statementPeriod": { "from": string, "to": string, "box": [], "page": 0 },
+  "paymentDueDate": { "val": string, "box": [], "page": 0 },
+  "openingBalance": { "val": number, "box": [], "page": 0 },
+  "closingBalance": { "val": number, "box": [], "page": 0 },
+  "outstandingTotal": { "val": number, "box": [], "page": 0 },
+  "minPaymentDue": { "val": number, "box": [], "page": 0 },
+  "creditLimit": { "val": number, "box": [], "page": 0 },
+  "availableLimit": { "val": number, "box": [], "page": 0 },
   "totalCredits": number | null,
   "totalDebits": number | null,
-  "totalDeposits": number | null,
-  "totalWithdrawals": number | null,
   "transactions": [
     {
       "date": string,
@@ -105,7 +107,7 @@ function toStatementPeriod(value) {
     return {
       from: value.from || '',
       to: value.to || '',
-      box: Array.isArray(value.box) ? value.box : [],
+      box: normalizeBox(value.box),
       page: value.page || 0,
     };
   }
@@ -145,8 +147,11 @@ function valueOfMaybeField(value) {
 }
 
 function normalizeBox(boxCandidate) {
-  if (!Array.isArray(boxCandidate) || boxCandidate.length < 4) return [];
-  return boxCandidate
+  if (!Array.isArray(boxCandidate) || boxCandidate.length === 0) return [];
+  // Flatten one level of nesting: Gemini sometimes returns [[top, left, bottom, right]]
+  const flat = Array.isArray(boxCandidate[0]) ? boxCandidate[0] : boxCandidate;
+  if (flat.length < 4) return [];
+  return flat
     .slice(0, 4)
     .map((n) => {
       const v = Number(n);
@@ -364,17 +369,24 @@ async function storePdfAndGetPublicUrl(userId, originalFileName, buffer) {
   const safeBase = path.basename(originalFileName, ext).replace(/[^\w.\- ()\[\]]+/g, '_').slice(0, 120);
   const pdfFileName = `${userId}-${Date.now()}-${safeBase}${ext}`;
 
+  console.log(`[Pipeline] Uploading PDF to Supabase bucket="${BUCKET}" path="${pdfFileName}"...`);
   const { error: uploadError } = await supabase.storage.from(BUCKET).upload(pdfFileName, buffer, {
     contentType: 'application/pdf',
     upsert: false,
   });
-  if (uploadError) throw new Error(`Failed to upload PDF to storage: ${uploadError.message}`);
+  if (uploadError) {
+    console.error(`[Pipeline] Supabase Upload Error:`, uploadError);
+    throw new Error(`Failed to upload PDF to storage: ${uploadError.message}`);
+  }
+  console.log('[Pipeline] Supabase Upload Success');
 
+  console.log('[Pipeline] Creating signed URL...');
   const { data: signedData, error: signError } = await supabase.storage
     .from(BUCKET)
     .createSignedUrl(pdfFileName, 60 * 60 * 24 * 365);
 
   if (signError || !signedData?.signedUrl) {
+    console.error(`[Pipeline] Supabase Signed URL Error:`, signError);
     throw new Error(`Failed to create public URL for uploaded PDF: ${signError?.message || 'unknown error'}`);
   }
 
@@ -392,10 +404,12 @@ async function extractTransactionsWithVertex(pdfStorageUrl) {
     'us-central1';
 
   if (!project) {
+    console.error('[Pipeline] CRITICAL: Google Project ID is missing. Check GOOGLE_CLOUD_PROJECT or GOOGLE_PROJECT_ID');
     throw new Error(
       'Vertex AI configuration is missing. Set GOOGLE_CLOUD_PROJECT (or GOOGLE_PROJECT_ID) and GOOGLE_CLOUD_LOCATION (or GOOGLE_LOCATION).'
     );
   }
+  console.log(`[Pipeline] Initializing Gemini client (Vertex=${!!process.env.GOOGLE_PROJECT_ID}, Project=${project}, Location=${location})`);
 
   const client = new GoogleGenAI({
     vertexai: true,
@@ -411,35 +425,40 @@ async function extractTransactionsWithVertex(pdfStorageUrl) {
     },
   };
 
-  const response = await client.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: [pdfFile, EXTRACTION_PROMPT],
-    generationConfig: {
-      temperature: 0,
-      responseMimeType: 'application/json',
-      maxOutputTokens: 32768,
-    },
-  });
-  console.log('[Pipeline] Gemini generateContent response received');
-  const finishReason = response?.candidates?.[0]?.finishReason || 'UNKNOWN';
-  console.log(`[Pipeline] Gemini finish reason: ${finishReason}`);
+  try {
+    const response = await client.models.generateContent({
+      model: 'gemini-2.5-pro',
+      contents: [pdfFile, EXTRACTION_PROMPT],
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: 'application/json',
+        maxOutputTokens: 32768,
+      },
+    });
+    console.log('[Pipeline] Gemini generateContent response received');
+    const finishReason = response?.candidates?.[0]?.finishReason || 'UNKNOWN';
+    console.log(`[Pipeline] Gemini finish reason: ${finishReason}`);
 
-  const rawText = extractTextFromGeminiResponse(response);
-  if (!rawText) throw new Error('Empty response from Vertex AI');
-  console.log(`[Pipeline] Gemini response text length: ${rawText.length}`);
+    const rawText = extractTextFromGeminiResponse(response);
+    if (!rawText) {
+      console.error('[Pipeline] Gemini returned an empty response candidate.');
+      throw new Error('Empty response from Vertex AI');
+    }
+    console.log(`[Pipeline] Gemini response text length: ${rawText.length}`);
 
-  const usage = response?.usageMetadata;
-  if (usage) {
-    console.log(
-      `[Pipeline] Token usage prompt=${usage.promptTokenCount || 0}, candidates=${usage.candidatesTokenCount || 0}, total=${usage.totalTokenCount || 0}`
-    );
+    const usage = response?.usageMetadata;
+    if (usage) {
+      console.log(
+        `[Pipeline] Token usage prompt=${usage.promptTokenCount || 0}, candidates=${usage.candidatesTokenCount || 0}, total=${usage.totalTokenCount || 0}`
+      );
+    }
+
+    const parsed = parseExtractionJson(rawText);
+    return normalizeExtraction(parsed);
+  } catch (geminiErr) {
+    console.error('[Pipeline] Gemini API call failed:', geminiErr);
+    throw geminiErr;
   }
-
-  const preview = rawText.replace(/\s+/g, ' ').slice(0, 300);
-  console.log(`[Pipeline] Gemini response preview: ${preview}`);
-
-  const parsed = parseExtractionJson(rawText);
-  return normalizeExtraction(parsed);
 }
 
 function applyExtraction(statement, extraction) {
@@ -516,9 +535,12 @@ async function processStatementPdf({
   statementType = 'CREDIT_CARD',
   gmailMessageId = null,
   isPreUnlocked = false,
+  batchIndex = 0,
+  batchTotal = 0,
 }) {
+  const prog = batchTotal > 0 ? `[${batchIndex}/${batchTotal}] ` : '';
   console.log(
-    `[Pipeline] Start processing file="${originalFileName}" user=${userId} source=${gmailMessageId ? 'gmail' : 'manual'} type=${statementType}`
+    `${prog}[Pipeline] Start processing file="${originalFileName}" user=${userId} source=${gmailMessageId ? 'gmail' : 'manual'} type=${statementType}`
   );
 
   let pdfForProcessing = pdfBuffer;
@@ -571,6 +593,21 @@ async function processStatementPdf({
   }
   await statement.save();
   console.log(`[Pipeline] Statement saved successfully with status=${statement.status}`);
+
+  if (gmailMessageId) {
+    try {
+      const user = await User.findById(userId).select('gmailImportedMessageIds');
+      if (user) {
+        const prev = user.gmailImportedMessageIds || [];
+        const merged = [...new Set([...prev, String(gmailMessageId)])];
+        user.gmailImportedMessageIds = merged.slice(-800);
+        await user.save();
+      }
+    } catch (e) {
+      console.warn('[Pipeline] Could not update gmailImportedMessageIds:', e?.message || e);
+    }
+  }
+
   return statement;
 }
 

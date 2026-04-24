@@ -6,6 +6,11 @@ import {
   IconUnlink,
   IconLock,
   IconBrain,
+  IconCheck,
+  IconX,
+  IconLoader2,
+  IconEye,
+  IconEyeOff,
 } from '@tabler/icons-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -27,6 +32,94 @@ if (!(Map.prototype as any).getOrInsertComputed) {
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
 
+/** Quick open test — tries original and uppercase variant (some banks require caps). Returns the working password string or null. */
+async function canOpenPdfWithPassword(file: File, password: string, treatAsEncrypted: boolean): Promise<string | null> {
+  const buf = await file.arrayBuffer();
+  const pOriginal = password.trim();
+  const pUpper = pOriginal.toUpperCase();
+  
+  // Try original first
+  try {
+    await pdfjsLib.getDocument({
+      data: buf,
+      password: treatAsEncrypted ? pOriginal : pOriginal || undefined,
+    }).promise;
+    return pOriginal;
+  } catch (e) {
+    if (!treatAsEncrypted || pOriginal === pUpper) return null;
+    
+    // Try uppercase if different
+    try {
+      await pdfjsLib.getDocument({
+        data: buf,
+        password: pUpper,
+      }).promise;
+      return pUpper;
+    } catch {
+      return null;
+    }
+  }
+}
+
+const GMAIL_UPLOAD_CACHE_KEY = 'creditUI_gmail_upload_cache_v1';
+const BATCH_CACHE_KEY = 'creditUI_batch_progress_v1';
+
+type BatchCacheItem = { id: string; filename: string; status: 'queued' | 'syncing' | 'done' | 'error'; error?: string };
+type BatchCachePayload = { items: BatchCacheItem[]; startedAt: string };
+
+function readBatchCache(): BatchCachePayload | null {
+  try {
+    const raw = localStorage.getItem(BATCH_CACHE_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as BatchCachePayload;
+    if (!Array.isArray(p?.items)) return null;
+    return p;
+  } catch { return null; }
+}
+
+function writeBatchCache(items: BatchCacheItem[]) {
+  const existing = readBatchCache();
+  localStorage.setItem(BATCH_CACHE_KEY, JSON.stringify({
+    items,
+    startedAt: existing?.startedAt || new Date().toISOString(),
+  }));
+}
+
+function clearBatchCache() {
+  localStorage.removeItem(BATCH_CACHE_KEY);
+}
+
+type GmailCachePayload = {
+  email: string;
+  candidates: any[];
+  selectedIds: string[];
+  candidatePasswords: Record<string, string>;
+  statementType: 'CREDIT_CARD' | 'BANK';
+  scannedAt: string;
+};
+
+type PwGateStatus = 'idle' | 'empty' | 'checking' | 'ok' | 'bad';
+
+function readGmailCache(): GmailCachePayload | null {
+  try {
+    const raw = localStorage.getItem(GMAIL_UPLOAD_CACHE_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as GmailCachePayload;
+    if (!p?.email || !Array.isArray(p.candidates)) return null;
+    return p;
+  } catch {
+    return null;
+  }
+}
+
+function writeGmailCache(payload: GmailCachePayload) {
+  localStorage.setItem(GMAIL_UPLOAD_CACHE_KEY, JSON.stringify(payload));
+}
+
+function clearGmailCache() {
+  localStorage.removeItem(GMAIL_UPLOAD_CACHE_KEY);
+}
+
 const Upload = () => {
   const [file, setFile] = useState<File | null>(null);
   const [password, setPassword] = useState('gaur2607');
@@ -38,9 +131,60 @@ const Upload = () => {
   const [candidates, setCandidates] = useState<any[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [candidatePasswords, setCandidatePasswords] = useState<Record<string, string>>({});
+  /** Per-row password validation before Gmail upload (green tick / red when wrong). */
+  const [passwordGateStatus, setPasswordGateStatus] = useState<Record<string, PwGateStatus>>({});
+  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
+  const [lastScannedAt, setLastScannedAt] = useState<string | null>(null);
+  const [nextPageToken, setNextPageToken] = useState('');
+  const [activeBankTab, setActiveBankTab] = useState('All');
+  const [gmailPipelineStep, setGmailPipelineStep] = useState<'idle' | 'checking_pw' | 'uploading'>('idle');
+  const [batchItems, setBatchItemsRaw] = useState<{ id: string; filename: string; status: 'queued' | 'syncing' | 'done' | 'error'; error?: string }[]>(() => {
+    // Restore from localStorage on mount; mark in-flight items as interrupted
+    const cached = readBatchCache();
+    if (!cached?.items?.length) return [];
+    return cached.items.map(item =>
+      (item.status === 'syncing' || item.status === 'queued')
+        ? { ...item, status: 'error' as const, error: 'Interrupted — page was reloaded' }
+        : item
+    );
+  });
+  const [activeBatch, setActiveBatch] = useState(false);
+
+  // Wrap setBatchItems to also persist to localStorage
+  const setBatchItems = (updater: ((prev: { id: string; filename: string; status: 'queued' | 'syncing' | 'done' | 'error'; error?: string }[]) => { id: string; filename: string; status: 'queued' | 'syncing' | 'done' | 'error'; error?: string }[]) | { id: string; filename: string; status: 'queued' | 'syncing' | 'done' | 'error'; error?: string }[]) => {
+    setBatchItemsRaw(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      writeBatchCache(next);
+      return next;
+    });
+  };
+  const [showSyncPopover, setShowSyncPopover] = useState(false);
+  const syncPopoverRef = useRef<HTMLDivElement>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const gmailOAuthToastDone = useRef(false);
+  const gmailRestoreDone = useRef(false);
+
+  // Close sync popover on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (syncPopoverRef.current && !syncPopoverRef.current.contains(e.target as Node)) {
+        setShowSyncPopover(false);
+      }
+    };
+    if (showSyncPopover) document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showSyncPopover]);
+
+  const availableBanks = React.useMemo(() => {
+    const banks = new Set<string>();
+    candidates.forEach(c => { if (c.bank) banks.add(c.bank); });
+    return ['All', ...Array.from(banks).sort()];
+  }, [candidates]);
+
+  const filteredCandidates = React.useMemo(() => {
+    return candidates.filter(c => activeBankTab === 'All' || c.bank === activeBankTab);
+  }, [candidates, activeBankTab]);
 
   const refreshGmailStatus = useCallback(async () => {
     try {
@@ -58,6 +202,43 @@ const Upload = () => {
   useEffect(() => {
     refreshGmailStatus();
   }, [refreshGmailStatus]);
+
+  useEffect(() => {
+    gmailRestoreDone.current = false;
+  }, [gmailStatus?.email]);
+
+  /** Restore last Gmail scan (same browser) until Reset or Disconnect clears it. */
+  useEffect(() => {
+    if (!gmailStatus?.connected || !gmailStatus.email) return;
+    if (gmailRestoreDone.current) return;
+    const cached = readGmailCache();
+    if (!cached || cached.email !== gmailStatus.email) return;
+    if (cached.candidates.length === 0) return;
+    gmailRestoreDone.current = true;
+
+    console.log('[Gmail Cache] Restoring from localStorage', { count: cached.candidates.length, at: cached.scannedAt });
+    
+    setCandidates(cached.candidates);
+    setSelectedIds(cached.selectedIds?.length ? cached.selectedIds : cached.candidates.map((c: any) => c.id));
+    setCandidatePasswords(cached.candidatePasswords || {});
+    setLastScannedAt(cached.scannedAt || null);
+    if (cached.statementType === 'CREDIT_CARD' || cached.statementType === 'BANK') {
+      setStatementType(cached.statementType);
+    }
+  }, [gmailStatus?.connected, gmailStatus?.email]);
+
+  useEffect(() => {
+    if (!gmailStatus?.connected || !gmailStatus.email) return;
+    if (candidates.length === 0) return;
+    writeGmailCache({
+      email: gmailStatus.email,
+      candidates,
+      selectedIds,
+      candidatePasswords,
+      statementType,
+      scannedAt: lastScannedAt || new Date().toISOString(),
+    });
+  }, [gmailStatus?.connected, gmailStatus?.email, candidates, selectedIds, candidatePasswords, statementType, lastScannedAt]);
 
   useEffect(() => {
     const g = searchParams.get('gmail');
@@ -87,13 +268,19 @@ const Upload = () => {
 
     try {
       const effectivePassword = password.trim() || 'gaur2607';
-      console.log(`[Frontend Unlock] Using password "${effectivePassword}" for ${file.name}`);
+      console.log(`[Frontend Unlock] Attempting unlock for ${file.name}`);
 
-      const unlockedFile = await unlockPdfInBrowser(file, effectivePassword);
+      const { file: unlockedFile, workingPassword } = await unlockPdfInBrowser(file, effectivePassword);
+      
+      if (workingPassword && workingPassword !== effectivePassword) {
+         setPassword(workingPassword); // Sync UI with the working variant
+      }
+
       const formData = new FormData();
       formData.append('pdf', unlockedFile);
       formData.append('statementType', statementType);
       formData.append('isUnlocked', 'true');
+      formData.append('pdfPassword', workingPassword); // Send working password to be saved on backend request if needed
 
       const { data } = await api.post('/api/statements', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -111,10 +298,29 @@ const Upload = () => {
 
   const unlockPdfInBrowser = async (sourceFile: File, sourcePassword: string) => {
     const buffer = await sourceFile.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({
-      data: buffer,
-      password: sourcePassword || undefined,
-    }).promise;
+    const pTrim = sourcePassword.trim();
+    const variants = [pTrim, pTrim.toUpperCase()];
+    const uniqueVariants = Array.from(new Set(variants.filter(v => v || sourcePassword === '')));
+
+    let pdf: any = null;
+    let workingPassword = '';
+
+    for (const p of uniqueVariants) {
+      try {
+        pdf = await pdfjsLib.getDocument({
+          data: buffer,
+          password: p || undefined,
+        }).promise;
+        workingPassword = p;
+        break;
+      } catch {
+        continue;
+      }
+    }
+
+    if (!pdf) {
+      throw new Error('Incorrect password: PDF could not be opened.');
+    }
 
     const rebuilt = await PDFDocument.create();
     for (let i = 1; i <= pdf.numPages; i += 1) {
@@ -139,7 +345,10 @@ const Upload = () => {
       unlockedBytes.byteOffset,
       unlockedBytes.byteOffset + unlockedBytes.byteLength
     ) as ArrayBuffer;
-    return new File([unlockedArrayBuffer], sourceFile.name, { type: 'application/pdf' });
+    return { 
+      file: new File([unlockedArrayBuffer], sourceFile.name, { type: 'application/pdf' }),
+      workingPassword
+    };
   };
 
   const connectGmail = async () => {
@@ -156,71 +365,286 @@ const Upload = () => {
     }
   };
 
-  const fetchGmailCandidates = async () => {
-    setGmailBusy(true);
+  const pollTimerRef = useRef<any>(null);
+
+  const checkScanStatus = useCallback(async (isManualTrigger = false) => {
     try {
       const { data } = await api.get('/api/gmail/candidates');
-      const fetched = data.candidates || [];
-      setCandidates(fetched);
-
-      const fresh = fetched
-        .filter((c: any) => !c.isImported || !c.existsInDb)
-        .map((c: any) => c.id);
-      setSelectedIds(fresh);
-      
-      const passes: Record<string, string> = {};
-      fetched.forEach((c: any) => {
-        passes[c.id] = c.savedPassword || 'gaur2607';
-      });
-      setCandidatePasswords(passes);
-
-      if (fetched.length === 0) {
-        toast.message('No statement PDFs found in your recent emails.');
+      if (data.status === 'scanning') {
+         setGmailBusy(true);
+         pollTimerRef.current = setTimeout(() => checkScanStatus(isManualTrigger), 3000);
       } else {
-        toast.success(`Found ${fetched.length} potential statement(s).`);
+         setGmailBusy(false);
+         if (data.status === 'error') {
+            toast.error(data.error || 'Scan failed.');
+         } else if (data.status === 'completed' && data.candidates) {
+            const fetched = data.candidates || [];
+            if (data.nextPageToken !== undefined) setNextPageToken(data.nextPageToken);
+            
+             setCandidates((prev) => {
+               if (!isManualTrigger && prev.length > 0) return prev; // Do not clobber user's restored cache on load
+
+               const fresh = fetched
+                 .filter((c: any) => c.shouldProcess && !c.alreadyProcessed && (!c.isImported || !c.existsInDb))
+                 .map((c: any) => c.id);
+               setSelectedIds(fresh);
+               
+               const passes: Record<string, string> = { ...candidatePasswords };
+               fetched.forEach((c: any) => {
+                 if (!passes[c.id]) passes[c.id] = c.savedPassword || 'gaur2607';
+               });
+               setCandidatePasswords(passes);
+               
+               if (isManualTrigger) {
+                 const now = new Date().toISOString();
+                 setLastScannedAt(now);
+                 if (fetched.length === 0) {
+                   toast.message('No statement PDFs found in your recent emails.');
+                   clearGmailCache();
+                 } else {
+                   toast.success(`Found ${fetched.length} potential statement(s).`);
+                 }
+               }
+               setPasswordGateStatus({});
+               return fetched;
+            });
+         }
       }
+    } catch {
+      setGmailBusy(false);
+    }
+  }, [candidatePasswords]);
+
+  // Cleanup poll timer on unmount
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, []);
+
+
+  const fetchGmailCandidates = async () => {
+    setGmailBusy(true);
+    setCandidates([]);
+    setSelectedIds([]);
+    setNextPageToken('');
+    setActiveBankTab('All');
+    try {
+      await api.post('/api/gmail/candidates', { loadMore: false });
+      toast.info('Started scanning inbox...');
+      checkScanStatus(true);
     } catch (e: any) {
-      toast.error(e.response?.data?.message || 'Failed to fetch email candidates.');
-    } finally {
+      toast.error(e.response?.data?.message || 'Failed to start scan.');
       setGmailBusy(false);
     }
   };
 
+  const loadMoreGmailCandidates = async () => {
+    if (!nextPageToken && activeBankTab === 'All') return;
+    setGmailBusy(true);
+    try {
+      await api.post('/api/gmail/candidates', { 
+        loadMore: true,
+        bankHint: activeBankTab !== 'All' ? activeBankTab : undefined
+      });
+      toast.info(activeBankTab !== 'All' ? `Searching older ${activeBankTab} statements...` : 'Fetching older statements...');
+      checkScanStatus(true);
+    } catch (e: any) {
+      toast.error(e.response?.data?.message || 'Failed to fetch more.');
+      setGmailBusy(false);
+    }
+  };
+
+  const parseAxiosErrorMessage = async (e: unknown): Promise<string> => {
+    const err = e as { message?: string; response?: { data?: unknown; status?: number } };
+    const d = err.response?.data;
+    if (d instanceof Blob) {
+      try {
+        const t = await d.text();
+        const j = JSON.parse(t) as { message?: string };
+        return j.message || t || 'Request failed';
+      } catch {
+        try {
+          return await d.text();
+        } catch {
+          return err.message || 'Request failed';
+        }
+      }
+    }
+    if (d && typeof d === 'object' && 'message' in d && typeof (d as { message: string }).message === 'string') {
+      return (d as { message: string }).message;
+    }
+    return err.message || 'Request failed';
+  };
+
+  const downloadGmailPdfAsFile = async (c: { messageId: string; filename: string }) => {
+    const { data: blob, headers } = await api.get<Blob>('/api/gmail/attachment', {
+      params: { messageId: c.messageId, filename: c.filename },
+      responseType: 'blob',
+    });
+    const ct = (headers['content-type'] || headers['Content-Type'] || '') as string;
+    if (ct.includes('application/json')) {
+      const text = await (blob as Blob).text();
+      const j = JSON.parse(text) as { message?: string };
+      throw new Error(j.message || 'Download failed');
+    }
+    return new File([blob as Blob], c.filename, { type: 'application/pdf' });
+  };
+
+  /** Same path as manual upload: validate passwords → fetch PDF → unlock in browser → POST with isUnlocked. */
   const syncSelectedCandidates = async () => {
     if (selectedIds.length === 0) return;
-    const missingPassword = candidates
-      .filter(c => selectedIds.includes(c.id))
-      .find(c => !String(candidatePasswords[c.id] || '').trim());
-    if (missingPassword) {
-      toast.error(`Password missing for ${missingPassword.filename}`);
+
+    const rows = candidates.filter(
+      (c) => selectedIds.includes(c.id) && 
+             !c.alreadyProcessed && 
+             c.shouldProcess !== false &&
+             (activeBankTab === 'All' || c.bank === activeBankTab)
+    );
+    if (rows.length === 0) {
+      toast.message('No statements selected for processing.');
       return;
     }
 
     setGmailBusy(true);
-    try {
-      const selections = candidates
-        .filter(c => selectedIds.includes(c.id))
-        .map(c => ({
-          messageId: c.messageId,
-          filename: c.filename,
-          password: String(candidatePasswords[c.id] || '').trim(),
-          statementType,
-        }));
+    setGmailPipelineStep('checking_pw');
 
-      const { data } = await api.post('/api/gmail/sync-selected', { selections });
-      const n = data.created?.length || 0;
-      if (n > 0) {
-        toast.success(`Successfully processed ${n} statement(s).`);
-        setCandidates([]);
-        navigate('/statements');
-      } else if (data.errors?.length > 0) {
-        toast.error(`Failed to sync: ${data.errors[0].error}`);
+    const treatEncrypted = (c: { encrypted?: boolean }) => c.encrypted !== false;
+    const gate: Record<string, PwGateStatus> = {};
+
+    try {
+      let missing = false;
+      for (const c of rows) {
+        const enc = treatEncrypted(c);
+        const pwd = String(candidatePasswords[c.id] ?? '').trim();
+        if (enc && !pwd) {
+          gate[c.id] = 'empty';
+          missing = true;
+        }
+      }
+      if (missing) {
+        setPasswordGateStatus((prev) => ({ ...prev, ...gate }));
+        toast.error('Enter a PDF password for every selected encrypted statement.');
+        return;
+      }
+
+      const gatePairs = await Promise.all(
+        rows.map(async (c) => {
+          const enc = treatEncrypted(c);
+          const pwd = String(candidatePasswords[c.id] ?? '').trim();
+          setPasswordGateStatus((prev) => ({ ...prev, [c.id]: 'checking' }));
+          try {
+            const file = await downloadGmailPdfAsFile(c);
+            const workingPwd = await canOpenPdfWithPassword(file, pwd, enc);
+            if (workingPwd) {
+              if (workingPwd !== pwd) {
+                 // Update state so the user sees which variant worked + we use it in the next step
+                 setCandidatePasswords((prev) => ({ ...prev, [c.id]: workingPwd }));
+              }
+              return [c.id, 'ok' as PwGateStatus] as const;
+            }
+            return [c.id, 'bad' as PwGateStatus] as const;
+          } catch {
+            return [c.id, 'bad' as PwGateStatus] as const;
+          }
+        })
+      );
+      const gateFromCheck = Object.fromEntries(gatePairs) as Record<string, PwGateStatus>;
+      setPasswordGateStatus((prev) => ({ ...prev, ...gateFromCheck }));
+
+      const allOk = rows.every((c) => gateFromCheck[c.id] === 'ok');
+      if (!allOk) {
+        toast.error('Some passwords are wrong or the PDF could not be opened. Fix the rows in red, then try again.');
+        return;
+      }
+
+      setGmailPipelineStep('uploading');
+      setActiveBatch(true);
+      
+      const initialBatch = rows.map(r => ({
+        id: r.id,
+        filename: r.filename,
+        status: 'queued' as const
+      }));
+      // Clear previous batch and start fresh
+      clearBatchCache();
+      setBatchItems(initialBatch);
+
+      const CONCURRENCY_LIMIT = 3;
+      const results: any[] = [];
+      const queue = [...rows];
+      let finishedCount = 0;
+
+      const processNext = async (): Promise<void> => {
+        if (queue.length === 0) return;
+        const c = queue.shift()!;
+        const index = rows.indexOf(c);
+        
+        setBatchItems(prev => prev.map(item => 
+          item.id === c.id ? { ...item, status: 'syncing' } : item
+        ));
+
+        const enc = c.encrypted !== false;
+        const pwd = String(candidatePasswords[c.id] ?? '').trim();
+        const effectivePassword = enc ? pwd : pwd || 'gaur2607';
+
+        try {
+          const file = await downloadGmailPdfAsFile(c);
+          const { file: unlockedFileResult } = await unlockPdfInBrowser(file, effectivePassword);
+
+          const formData = new FormData();
+          formData.append('pdf', unlockedFileResult);
+          formData.append('statementType', statementType);
+          formData.append('isUnlocked', 'true');
+          formData.append('gmailMessageId', c.messageId);
+          formData.append('pdfPassword', effectivePassword);
+          formData.append('bankLabel', c.bank);
+          formData.append('batchIndex', String(index + 1));
+          formData.append('batchTotal', String(rows.length));
+          
+          if (c.parsedPeriod?.from) formData.append('emailPeriodFrom', String(c.parsedPeriod.from));
+          if (c.parsedPeriod?.to) formData.append('emailPeriodTo', String(c.parsedPeriod.to));
+          if (c.accountHint) formData.append('emailAccountHint', String(c.accountHint));
+
+          const { data: created } = await api.post('/api/statements', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+          
+          setBatchItems(prev => prev.map(item => 
+            item.id === c.id ? { ...item, status: 'done' } : item
+          ));
+          results.push({ kind: 'ok', c });
+        } catch (inner: unknown) {
+          const msg = await parseAxiosErrorMessage(inner);
+          setBatchItems(prev => prev.map(item => 
+            item.id === c.id ? { ...item, status: 'error', error: msg } : item
+          ));
+          results.push({ kind: 'err', c, msg });
+        } finally {
+          finishedCount += 1;
+          await processNext();
+        }
+      };
+
+      // Start initial workers
+      const workers = Array(Math.min(CONCURRENCY_LIMIT, rows.length))
+        .fill(null)
+        .map(() => processNext());
+      
+      await Promise.all(workers);
+
+      const okCount = results.filter(r => r.kind === 'ok').length;
+      if (okCount > 0) {
+        toast.success(`Batch complete: ${okCount} statement(s) processed.`);
       }
       await refreshGmailStatus();
-    } catch (e: any) {
-      toast.error(e.response?.data?.message || 'Sync failed.');
+    } catch (e: unknown) {
+      toast.error(await parseAxiosErrorMessage(e));
     } finally {
       setGmailBusy(false);
+      setGmailPipelineStep('idle');
+      // Mark batch as done but keep items visible in the hub until user starts a new batch
+      setActiveBatch(false);
     }
   };
 
@@ -228,6 +652,12 @@ const Upload = () => {
     setGmailBusy(true);
     try {
       await api.post('/api/gmail/disconnect');
+      clearGmailCache();
+      gmailRestoreDone.current = false;
+      setCandidates([]);
+      setSelectedIds([]);
+      setCandidatePasswords({});
+      setPasswordGateStatus({});
       await refreshGmailStatus();
       toast.success('Gmail disconnected.');
     } catch {
@@ -242,6 +672,12 @@ const Upload = () => {
     setGmailBusy(true);
     try {
       await api.post('/api/gmail/reset');
+      clearGmailCache();
+      gmailRestoreDone.current = false;
+      setCandidates([]);
+      setSelectedIds([]);
+      setCandidatePasswords({});
+      setPasswordGateStatus({});
       toast.success('Sync history cleared.');
       await refreshGmailStatus();
     } catch {
@@ -252,148 +688,534 @@ const Upload = () => {
   };
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] p-8 max-w-5xl mx-auto space-y-8 animate-in fade-in duration-500">
-      <div className="space-y-4">
-        <h1 className="text-4xl font-bold tracking-tight text-primary">
+    <div className="h-[calc(100vh-4rem)] p-6 overflow-hidden animate-in fade-in duration-500 flex flex-col gap-6 max-w-[1600px] mx-auto w-full">
+      <div className="space-y-1 shrink-0">
+        <h1 className="text-3xl font-bold tracking-tight text-primary">
           Statement Upload
         </h1>
-        <p className="text-muted-foreground">
+        <p className="text-muted-foreground text-sm">
           Single pipeline: unlock PDF on backend, store unlocked file, process with Vertex Gemini 2.5 Flash, and save to your statement history.
         </p>
       </div>
 
-      <Card className="rounded-2xl p-6 bg-muted/20 border border-primary/10 space-y-5">
-        <h2 className="text-lg font-semibold">Manual Upload</h2>
+      <div className="flex flex-1 gap-6 min-h-0">
+        {/* LEFT COLUMN: Controls */}
+        <div className="w-1/3 min-w-[360px] max-w-[420px] flex flex-col gap-6 overflow-y-auto pr-2 pb-4 style-scroll no-scrollbar">
+          <Card className="rounded-2xl p-5 bg-muted/20 border border-primary/10 space-y-4 shadow-sm">
+             {/* Statement type */}
+             <div className="flex flex-col gap-2">
+                <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                  Statement type
+                </span>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant={statementType === 'CREDIT_CARD' ? 'default' : 'outline'}
+                    onClick={() => setStatementType('CREDIT_CARD')}
+                  >
+                    Credit Card
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={statementType === 'BANK' ? 'default' : 'outline'}
+                    onClick={() => setStatementType('BANK')}
+                  >
+                    Bank
+                  </Button>
+                </div>
+             </div>
+          </Card>
 
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <span className="text-[11px] text-muted-foreground">Statement Type</span>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant={statementType === 'CREDIT_CARD' ? 'default' : 'outline'}
-                onClick={() => setStatementType('CREDIT_CARD')}
-              >
-                Credit Card
-              </Button>
-              <Button
-                type="button"
-                variant={statementType === 'BANK' ? 'default' : 'outline'}
-                onClick={() => setStatementType('BANK')}
-              >
-                Bank
-              </Button>
-            </div>
-          </div>
-
-          <label className="relative border border-dashed border-primary/20 rounded-xl p-8 text-center bg-background cursor-pointer">
-            <input type="file" className="hidden" onChange={handleFileChange} accept=".pdf" />
-            <div className="flex flex-col items-center gap-2">
-              <IconUpload size={28} className="text-primary/70" />
-              <p className="font-medium">{file ? file.name : 'Select PDF statement'}</p>
-              <p className="text-xs text-muted-foreground">Only PDF files are supported</p>
-            </div>
-          </label>
-
-          {file && (
-            <>
-              <div className="relative">
-                <input
-                  type="password"
-                  placeholder="Enter PDF password"
-                  className="flex h-11 w-full rounded-xl border border-primary/10 bg-background px-3 py-2 pl-10 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-                <IconLock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              </div>
-              <Button onClick={startUpload} disabled={isUploading} className="h-11 rounded-xl gap-2">
-                <IconBrain size={16} />
-                {isUploading ? 'Processing...' : 'Upload & Process'}
-              </Button>
-            </>
-          )}
-          {errorHeader && <p className="text-xs text-red-500 font-semibold">{errorHeader}</p>}
-        </div>
-      </Card>
-
-      <Card className="rounded-2xl p-6 bg-muted/20 border border-primary/10 space-y-4">
-        <div className="flex items-start gap-3">
-          <div className="p-2 rounded-lg bg-background text-primary">
-            <IconMail size={18} />
-          </div>
-          <div className="space-y-1">
-            <h2 className="text-lg font-semibold">Gmail Sync</h2>
-            <p className="text-xs text-muted-foreground">
-              Fetch statement PDFs from Gmail, enter passwords, and process with the same backend pipeline.
-            </p>
-            {gmailStatus?.connected && gmailStatus.email && (
-              <p className="text-xs text-emerald-700 font-semibold">Connected: {gmailStatus.email}</p>
-            )}
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          {!gmailStatus?.connected ? (
-            <Button type="button" onClick={connectGmail} disabled={gmailBusy}>
-              {gmailBusy ? 'Opening...' : 'Connect Gmail'}
-            </Button>
-          ) : (
-            <>
-              <Button type="button" onClick={fetchGmailCandidates} disabled={gmailBusy} className="gap-2">
-                <IconRefresh size={16} className={cn(gmailBusy && 'animate-spin')} />
-                {gmailBusy ? 'Scanning...' : 'Scan Inbox'}
-              </Button>
-              <Button type="button" variant="outline" onClick={resetGmailSync} disabled={gmailBusy}>
-                Reset
-              </Button>
-              <Button type="button" variant="outline" onClick={disconnectGmail} disabled={gmailBusy} className="gap-2">
-                <IconUnlink size={14} />
-                Disconnect
-              </Button>
-            </>
-          )}
-        </div>
-
-        {candidates.length > 0 && (
-          <div className="space-y-3 border-t border-primary/10 pt-4">
-            {candidates.map((c) => {
-              const isSelected = selectedIds.includes(c.id);
-              return (
-                <div key={c.id} className={cn('p-3 rounded-xl border bg-background', !isSelected && 'opacity-60')}>
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="flex items-center gap-2 text-sm font-medium cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={() =>
-                          setSelectedIds((prev) => (isSelected ? prev.filter((id) => id !== c.id) : [...prev, c.id]))
-                        }
-                      />
-                      <span>{c.filename}</span>
-                    </label>
-                    <span className="text-[11px] text-muted-foreground">{c.bank}</span>
+          <Card className="rounded-2xl p-5 bg-muted/20 border border-primary/10 space-y-4 shadow-sm">
+             <h2 className="text-lg font-semibold">Manual Upload</h2>
+             <div className="flex flex-col gap-4">
+                <label className="relative border border-dashed border-primary/20 rounded-xl p-6 text-center bg-background cursor-pointer hover:bg-muted/10 transition-colors">
+                  <input type="file" className="hidden" onChange={handleFileChange} accept=".pdf" />
+                  <div className="flex flex-col items-center gap-2">
+                    <IconUpload size={24} className="text-primary/70" />
+                    <p className="font-medium text-sm">{file ? file.name : 'Select PDF statement'}</p>
                   </div>
-                  {isSelected && (
-                    <div className="mt-2">
+                </label>
+
+                {file && (
+                  <div className="space-y-3 animate-in fade-in slide-in-from-top-2">
+                    <div className="relative">
                       <input
                         type="password"
                         placeholder="Enter PDF password"
-                        className="flex h-9 w-full rounded-lg border border-primary/10 bg-background px-3 py-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
-                        value={candidatePasswords[c.id] || ''}
-                        onChange={(e) => setCandidatePasswords((prev) => ({ ...prev, [c.id]: e.target.value }))}
+                        className="flex h-10 w-full rounded-xl border border-primary/10 bg-background px-3 py-2 pl-9 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
                       />
+                      <IconLock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    </div>
+                    <Button onClick={startUpload} disabled={isUploading} className="h-10 rounded-xl gap-2 w-full">
+                      <IconBrain size={16} />
+                      {isUploading ? 'Processing...' : 'Upload & Process'}
+                    </Button>
+                  </div>
+                )}
+                {errorHeader && <p className="text-xs text-red-500 font-semibold">{errorHeader}</p>}
+             </div>
+          </Card>
+
+          <Card className="rounded-2xl p-5 bg-muted/20 border border-primary/10 space-y-4 shadow-sm">
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-background border border-primary/5 text-primary shrink-0">
+                <IconMail size={18} />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-lg font-semibold">Gmail Sync</h2>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  PDFs are downloaded here, unlocked locally, then sent to the Vertex pipeline.
+                </p>
+                {gmailStatus?.connected && gmailStatus.email && (
+                  <p className="text-[11px] text-emerald-700 font-semibold mt-1 bg-emerald-50 inline-block px-1.5 py-0.5 rounded">
+                    Connected: {gmailStatus.email}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2 pt-1">
+              {!gmailStatus?.connected ? (
+                <Button type="button" onClick={connectGmail} disabled={gmailBusy} className="h-9 text-xs">
+                  {gmailBusy ? 'Opening...' : 'Connect Gmail'}
+                </Button>
+              ) : (
+                <>
+                  <Button type="button" onClick={fetchGmailCandidates} disabled={gmailBusy} className="gap-2 h-9 text-xs">
+                    <IconRefresh size={14} className={cn(gmailBusy && 'animate-spin')} />
+                    {gmailBusy ? 'Scanning...' : 'Scan Inbox'}
+                  </Button>
+                  <Button type="button" variant="outline" onClick={resetGmailSync} disabled={gmailBusy} className="h-9 text-xs bg-background">
+                    Reset
+                  </Button>
+                  <Button type="button" variant="outline" onClick={disconnectGmail} disabled={gmailBusy} className="gap-1.5 h-9 text-xs bg-background">
+                    <IconUnlink size={13} />
+                    Disconnect
+                  </Button>
+                </>
+              )}
+            </div>
+          </Card>
+        </div>
+
+        {/* RIGHT COLUMN: Table View */}
+        <div className="flex-1 flex flex-col min-h-0 border border-primary/10 rounded-2xl bg-muted/10 overflow-hidden shadow-sm">
+           <div className="flex items-center justify-between p-4 border-b border-primary/10 bg-background/50 shrink-0">
+             <div>
+               <div className="flex items-center gap-2">
+                 <h2 className="text-base font-semibold">Gmail Sync Candidates</h2>
+                 {lastScannedAt && (
+                   <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded border border-primary/5 uppercase tracking-tighter font-medium">
+                     Last scanned: {new Date(lastScannedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                   </span>
+                 )}
+               </div>
+               <p className="text-xs text-muted-foreground">Select PDFs and enter passwords to process</p>
+             </div>
+             {candidates.length > 0 && (
+               <div className="flex items-center gap-3 shrink-0">
+                 <div className="text-xs bg-primary/5 text-primary px-2.5 py-1 rounded-full font-medium">
+                    {selectedIds.filter(id => {
+                      const c = candidates.find(cand => cand.id === id);
+                      return c && (activeBankTab === 'All' || c.bank === activeBankTab);
+                    }).length} Selected
+                 </div>
+                 <Button
+                   type="button"
+                   onClick={syncSelectedCandidates}
+                   disabled={gmailBusy || selectedIds.length === 0}
+                   className={cn(
+                     "h-9 rounded-xl gap-2 font-medium transition-all",
+                     activeBatch && "bg-slate-900 border-slate-700"
+                   )}
+                 >
+                   <IconBrain size={16} />
+                   {gmailBusy && gmailPipelineStep === 'checking_pw'
+                     ? 'Checking pw...'
+                     : gmailBusy && gmailPipelineStep === 'uploading'
+                       ? 'Syncing...'
+                       : activeBankTab === 'All'
+                          ? 'Process Selected'
+                          : `Process ${activeBankTab} Selected`}
+                 </Button>
+
+                 {/* Sync Status Popover */}
+                 <div className="relative" ref={syncPopoverRef}>
+                   <Button
+                     type="button"
+                     variant="outline"
+                     onClick={() => setShowSyncPopover(v => !v)}
+                     className="h-9 w-9 p-0 rounded-xl border-border relative"
+                     title="View Sync Status"
+                   >
+                     <IconRefresh size={16} className={cn(activeBatch && "animate-spin text-primary")} />
+                     {activeBatch && (
+                       <span className="absolute -top-1 -right-1 h-2.5 w-2.5 bg-primary rounded-full border-2 border-background animate-pulse" />
+                     )}
+                   </Button>
+
+                   {showSyncPopover && (
+                     <div className="absolute right-0 top-full mt-2 z-50 w-[400px] bg-card border border-border rounded-2xl shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                       {/* Header */}
+                       <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-muted/30">
+                         <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center border border-primary/20 shrink-0">
+                           <IconBrain size={16} className={cn("text-primary", activeBatch && "animate-pulse")} />
+                         </div>
+                         <div className="flex-1 min-w-0">
+                           <h3 className="text-sm font-semibold text-foreground">Sync Status Hub</h3>
+                           <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-widest">
+                             {activeBatch ? "Running · 3 Parallel Streams" : "Idle"} · Gemini 2.5 Flash
+                           </p>
+                         </div>
+                         {activeBatch && (
+                           <span className="px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider bg-primary/10 text-primary shrink-0">
+                             Live
+                           </span>
+                         )}
+                       </div>
+
+                       {/* Item List */}
+                       <div className="px-2 py-2 space-y-1 max-h-[300px] overflow-y-auto no-scrollbar">
+                         {batchItems.length === 0 ? (
+                           <div className="py-8 text-center text-muted-foreground">
+                             <IconRefresh size={24} className="mx-auto mb-2 opacity-30" />
+                             <p className="text-xs font-medium">No sync jobs yet</p>
+                             <p className="text-[10px] mt-0.5">Start a batch to see progress here</p>
+                           </div>
+                         ) : batchItems.map((item, idx) => (
+                           <div
+                             key={item.id}
+                             className={cn(
+                               "flex items-center gap-3 px-3 py-2.5 rounded-xl border transition-all duration-300",
+                               item.status === 'syncing' ? "bg-primary/5 border-primary/20" :
+                               item.status === 'done' ? "bg-emerald-500/5 border-emerald-500/15" :
+                               item.status === 'error' ? "bg-destructive/5 border-destructive/20" :
+                               "bg-muted/20 border-border"
+                             )}
+                           >
+                             <div className={cn(
+                               "h-6 w-6 rounded-md flex items-center justify-center shrink-0",
+                               item.status === 'syncing' ? "bg-primary/10" :
+                               item.status === 'done' ? "bg-emerald-500/10" :
+                               item.status === 'error' ? "bg-destructive/10" : "bg-muted"
+                             )}>
+                               {item.status === 'syncing' && <IconLoader2 size={12} className="text-primary animate-spin" />}
+                               {item.status === 'done' && <IconCheck size={12} className="text-emerald-500" />}
+                               {item.status === 'error' && <IconX size={12} className="text-destructive" />}
+                               {item.status === 'queued' && <span className="text-[9px] font-black text-muted-foreground">{idx + 1}</span>}
+                             </div>
+
+                             <div className="flex-1 min-w-0">
+                               <p className="text-xs font-semibold text-foreground truncate">{item.filename}</p>
+                               {item.status === 'error' && item.error && (
+                                 <p className="text-[10px] text-destructive/70 truncate font-medium">{item.error}</p>
+                               )}
+                               {item.status === 'syncing' && (
+                                 <p className="text-[10px] text-primary/60 font-medium">Sending to AI pipeline...</p>
+                               )}
+                               {item.status === 'queued' && (
+                                 <p className="text-[10px] text-muted-foreground">Waiting in queue</p>
+                               )}
+                             </div>
+
+                             <span className={cn(
+                               "px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider shrink-0",
+                               item.status === 'syncing' ? "bg-primary/15 text-primary" :
+                               item.status === 'done' ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" :
+                               item.status === 'error' ? "bg-destructive/15 text-destructive" :
+                               "bg-muted text-muted-foreground"
+                             )}>
+                               {item.status}
+                             </span>
+                           </div>
+                         ))}
+                       </div>
+
+                       {/* Footer */}
+                       {batchItems.length > 0 && (
+                         <div className="px-4 py-3 border-t border-border bg-muted/20 space-y-2">
+                           <div className="flex items-center justify-between">
+                             <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                               <span className="flex items-center gap-1">
+                                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                 {batchItems.filter(i => i.status === 'done').length} done
+                               </span>
+                               <span className="flex items-center gap-1">
+                                 <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                                 {batchItems.filter(i => i.status === 'syncing').length} syncing
+                               </span>
+                               <span className="flex items-center gap-1">
+                                 <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+                                 {batchItems.filter(i => i.status === 'error').length} failed
+                               </span>
+                             </div>
+                             <span className="text-sm font-black tabular-nums text-foreground">
+                               {Math.round((batchItems.filter(i => i.status === 'done' || i.status === 'error').length / (batchItems.length || 1)) * 100)}%
+                             </span>
+                           </div>
+                           <div className="h-1 w-full bg-muted rounded-full overflow-hidden">
+                             <div
+                               className="h-full bg-primary rounded-full transition-all duration-700 ease-out"
+                               style={{ width: `${(batchItems.filter(i => i.status === 'done' || i.status === 'error').length / (batchItems.length || 1)) * 100}%` }}
+                             />
+                           </div>
+                         </div>
+                       )}
+                     </div>
+                   )}
+                 </div>
+               </div>
+             )}
+           </div>
+
+           {candidates.length > 0 && availableBanks.length > 2 && (
+              <div className="px-4 py-2 bg-muted/5 border-b border-primary/10 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                {availableBanks.map((bank) => {
+                  const count = candidates.filter(c => bank === 'All' || c.bank === bank).length;
+                  return (
+                    <button
+                      key={bank}
+                      onClick={() => setActiveBankTab(bank)}
+                      className={cn(
+                        "px-3 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0 flex items-center gap-2",
+                        activeBankTab === bank 
+                          ? "bg-primary text-primary-foreground shadow-sm" 
+                          : "text-muted-foreground hover:bg-muted/50"
+                      )}
+                    >
+                      {bank}
+                      <span className={cn(
+                        "px-1.5 py-0.5 rounded-md text-[10px]",
+                        activeBankTab === bank ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground"
+                      )}>
+                        {count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="flex-1 overflow-y-auto min-h-0 p-4 relative no-scrollbar">
+
+              {candidates.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground border-2 border-dashed border-primary/10 rounded-xl p-8 bg-background/50">
+                  <div className="w-16 h-16 rounded-full bg-primary/5 flex items-center justify-center mb-4">
+                    <IconMail size={28} className="text-primary/40" />
+                  </div>
+                  <p className="font-semibold text-foreground/80 text-lg">No candidates loaded</p>
+                  <p className="text-sm mt-1 max-w-sm">Connect Gmail and click Scan Inbox to securely find and parse bank statements from your emails.</p>
+                </div>
+              ) : filteredCandidates.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground border-2 border-dashed border-primary/10 rounded-xl p-8 bg-background/50">
+                   <p className="font-semibold text-lg">No {activeBankTab} candidates found.</p>
+                   <p className="text-sm mt-1">Try searching Gmail specifically for this bank below.</p>
+                   <Button 
+                      onClick={loadMoreGmailCandidates}
+                      disabled={gmailBusy}
+                      className="mt-4 gap-2 rounded-xl"
+                   >
+                      <IconRefresh size={16} className={cn(gmailBusy && 'animate-spin')} />
+                      Search Gmail for {activeBankTab}
+                   </Button>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-primary/10 bg-background overflow-hidden relative shadow-sm">
+                  <table className="w-full text-left text-sm whitespace-nowrap">
+                    <thead className="bg-muted/50 text-[11px] text-muted-foreground uppercase tracking-wide sticky top-0 z-10 box-border border-b border-primary/10">
+                      <tr>
+                        <th className="p-3 w-10 text-center">
+                           <input
+                              type="checkbox"
+                              className="rounded border-primary/30 cursor-pointer w-4 h-4 text-primary"
+                              checked={filteredCandidates.every(c => selectedIds.includes(c.id))}
+                              onChange={(e) => {
+                                 const allVisibleIds = filteredCandidates.map(c => c.id);
+                                 if (e.target.checked) {
+                                    setSelectedIds(prev => Array.from(new Set([...prev, ...allVisibleIds])));
+                                 } else {
+                                    setSelectedIds(prev => prev.filter(id => !allVisibleIds.includes(id)));
+                                 }
+                              }}
+                           />
+                        </th>
+                        <th className="p-3 font-semibold">Document</th>
+                        {activeBankTab === 'All' && <th className="p-3 font-semibold">Bank</th>}
+                        <th className="p-3 font-semibold">Password & Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-primary/5">
+                      {filteredCandidates.map((c) => {
+                        const isSelected = selectedIds.includes(c.id);
+                        const lockedAsDone = Boolean(c.alreadyProcessed);
+                        const classifierSkipped = c.shouldProcess === false;
+                        
+                        return (
+                          <tr 
+                            key={c.id} 
+                            className={cn(
+                              "hover:bg-muted/30 transition-colors group",
+                              (!isSelected || lockedAsDone || classifierSkipped) && 'opacity-60 bg-muted/10'
+                            )}
+                          >
+                            <td className="p-3 align-top text-center">
+                               <input
+                                 type="checkbox"
+                                 className="rounded border-primary/30 mt-1 cursor-pointer w-4 h-4 text-primary"
+                                 checked={isSelected}
+                                 disabled={lockedAsDone || classifierSkipped}
+                                 onChange={() =>
+                                   setSelectedIds((prev) => (isSelected ? prev.filter((id) => id !== c.id) : [...prev, c.id]))
+                                 }
+                               />
+                            </td>
+                            <td className="p-3 align-top max-w-[280px] whitespace-normal">
+                               <p className="font-medium break-words leading-tight">{c.filename}</p>
+                               {c.parsedPeriod?.from && c.parsedPeriod?.to && (
+                                  <p className="text-[11px] text-muted-foreground mt-2 flex items-center gap-1.5 font-medium">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>
+                                    {c.parsedPeriod.from} <span className="opacity-40 font-normal">to</span> {c.parsedPeriod.to}
+                                  </p>
+                                )}
+                            </td>
+                            {activeBankTab === 'All' && (
+                               <td className="p-3 align-top whitespace-normal min-w-[140px]">
+                                 <div className="flex flex-col items-start gap-1.5">
+                                   <span className="text-[11px] bg-primary/5 px-2 py-0.5 rounded border border-primary/10 font-bold tracking-wide">{c.bank}</span>
+                                   {lockedAsDone && (
+                                      <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100 font-semibold tracking-wider uppercase">
+                                        Processed
+                                      </span>
+                                   )}
+                                   {classifierSkipped && !lockedAsDone && (
+                                      <span className="text-[10px] text-slate-600 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200 font-semibold tracking-wider uppercase">
+                                        Skipped
+                                      </span>
+                                   )}
+                                   {c.classificationReason && (
+                                     <p className="text-[10px] text-muted-foreground leading-tight max-w-[150px] mt-0.5">{c.classificationReason}</p>
+                                   )}
+                                 </div>
+                               </td>
+                            )}
+                            <td className="p-3 align-top w-[360px] whitespace-normal">
+                               {lockedAsDone ? (
+                                  <div className="flex items-center gap-2 py-1">
+                                     <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600">
+                                        <IconCheck size={16} strokeWidth={3} />
+                                     </div>
+                                     <div>
+                                        <p className="text-xs font-semibold text-emerald-800">Successfully Imported</p>
+                                        <p className="text-[10px] text-emerald-600/70">Securely stored and indexed</p>
+                                     </div>
+                                  </div>
+                               ) : classifierSkipped ? (
+                                  <div className="py-1">
+                                     <p className="text-xs text-muted-foreground italic">Excluded by classifier</p>
+                                  </div>
+                               ) : isSelected ? (
+                                 <div className="flex flex-col gap-2.5 animate-in fade-in zoom-in-95 duration-200">
+                                   {c.encrypted !== false && (
+                                     <>
+                                       {c.passwordHint?.hasPasswordHint ? (
+                                         <div className="rounded border border-amber-200 bg-amber-50/90 py-1.5 px-2.5 text-[11px] text-amber-950 shadow-[inset_0_1px_2px_rgba(0,0,0,0.02)]">
+                                            {c.passwordHint.userMessage ? (
+                                              <p className="font-medium leading-snug">{c.passwordHint.userMessage}</p>
+                                            ) : (
+                                              <p><span className="font-bold">Hint:</span> {c.passwordHint.passwordRule}</p>
+                                            )}
+                                         </div>
+                                       ) : (
+                                         <p className="text-[10px] text-muted-foreground flex items-start gap-1.5 leading-tight">
+                                           <IconLock size={12} className="shrink-0 mt-0.5" />
+                                           <span>Password protected. No hint found. Enter your standard bank password.</span>
+                                         </p>
+                                       )}
+                                     </>
+                                   )}
+                                   <div className="flex items-center gap-2">
+                                      <div className="relative flex-1 group/input">
+                                        <input
+                                          type={showPasswords[c.id] ? 'text' : 'password'}
+                                          placeholder={c.encrypted === false ? 'Optional password' : 'PDF Password'}
+                                          className={cn(
+                                            'flex h-9 w-full rounded-lg border bg-background px-3 py-1 pr-9 text-xs focus-visible:outline-none focus-visible:ring-2 transition-all',
+                                            passwordGateStatus[c.id] === 'empty' || passwordGateStatus[c.id] === 'bad'
+                                              ? 'border-red-400 focus-visible:ring-red-200 ring-2 ring-red-100'
+                                              : passwordGateStatus[c.id] === 'ok'
+                                                ? 'border-emerald-400 focus-visible:ring-emerald-200 ring-2 ring-emerald-50'
+                                                : 'border-primary/20 focus-visible:ring-primary/20 hover:border-primary/40'
+                                          )}
+                                          value={candidatePasswords[c.id] || ''}
+                                          onChange={(e) => {
+                                            setCandidatePasswords((prev) => ({ ...prev, [c.id]: e.target.value }));
+                                            setPasswordGateStatus((prev) => ({ ...prev, [c.id]: 'idle' }));
+                                          }}
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => setShowPasswords((prev) => ({ ...prev, [c.id]: !prev[c.id] }))}
+                                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-primary transition-colors duration-200"
+                                        >
+                                          {showPasswords[c.id] ? <IconEyeOff size={14} /> : <IconEye size={14} />}
+                                        </button>
+                                      </div>
+                                      <div
+                                        className={cn(
+                                          'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border bg-muted/20 transition-all duration-300',
+                                          passwordGateStatus[c.id] === 'empty' || passwordGateStatus[c.id] === 'bad'
+                                            ? 'border-red-300 bg-red-50 text-red-500 scale-105'
+                                            : passwordGateStatus[c.id] === 'ok'
+                                              ? 'border-emerald-200 bg-emerald-50 text-emerald-600 shadow-sm scale-105'
+                                              : 'border-transparent text-muted-foreground scale-100'
+                                        )}
+                                      >
+                                        {passwordGateStatus[c.id] === 'checking' && (
+                                          <IconLoader2 size={16} className="animate-spin text-primary" />
+                                        )}
+                                        {passwordGateStatus[c.id] === 'ok' && <IconCheck size={18} strokeWidth={3} />}
+                                        {(passwordGateStatus[c.id] === 'bad' || passwordGateStatus[c.id] === 'empty') && (
+                                          <IconX size={16} strokeWidth={2.5} />
+                                        )}
+                                      </div>
+                                   </div>
+                                 </div>
+                               ) : (
+                                 <p className="text-[10px] text-muted-foreground italic">Select to edit password</p>
+                               )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  
+                  {(nextPageToken || activeBankTab !== 'All') && (
+                    <div className="p-4 border-t border-primary/10 bg-muted/5 flex justify-center">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={loadMoreGmailCandidates}
+                        disabled={gmailBusy}
+                        className="gap-2 text-xs font-medium bg-background hover:bg-primary/5 transition-all"
+                      >
+                        {gmailBusy ? (
+                          <IconLoader2 size={14} className="animate-spin" />
+                        ) : (
+                          <IconRefresh size={14} />
+                        )}
+                        {activeBankTab !== 'All' ? `Search more ${activeBankTab} from Gmail` : 'Load Older Statements'}
+                      </Button>
                     </div>
                   )}
                 </div>
-              );
-            })}
-            <Button onClick={syncSelectedCandidates} disabled={gmailBusy || selectedIds.length === 0} className="w-full">
-              {gmailBusy ? 'Processing...' : `Process Selected (${selectedIds.length})`}
-            </Button>
-          </div>
-        )}
-      </Card>
+              )}
+           </div>
+        </div>
+      </div>
     </div>
   );
 };
