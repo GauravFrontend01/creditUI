@@ -411,6 +411,12 @@ async function extractTransactionsWithVertex(pdfStorageUrl) {
   }
   console.log(`[Pipeline] Initializing Gemini client (Vertex=${!!process.env.GOOGLE_PROJECT_ID}, Project=${project}, Location=${location})`);
 
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    const credsPath = path.resolve(__dirname, '..', process.env.GOOGLE_APPLICATION_CREDENTIALS);
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = credsPath;
+    console.log(`[Pipeline] Using service account from: ${credsPath}`);
+  }
+
   const client = new GoogleGenAI({
     vertexai: true,
     project,

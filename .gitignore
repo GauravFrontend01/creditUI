@@ -32,3 +32,4 @@ backend/dist
 backend/venv-ocr
 backend/__pycache__
 backend/*.pyc
+backend/service-account.json
