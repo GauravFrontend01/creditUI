@@ -606,7 +606,7 @@ const Upload = () => {
           if (c.parsedPeriod?.to) formData.append('emailPeriodTo', String(c.parsedPeriod.to));
           if (c.accountHint) formData.append('emailAccountHint', String(c.accountHint));
 
-          const { data: created } = await api.post('/api/statements', formData, {
+          await api.post('/api/statements', formData, {
             headers: { 'Content-Type': 'multipart/form-data' },
           });
           

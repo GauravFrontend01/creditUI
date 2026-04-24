@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 import {
   IconDownload, IconArrowLeft, IconFileOff, IconLoader2,
   IconReceipt2, IconChartBar, IconCreditCard, IconCalendar,
-  IconTrendingDown, IconTrendingUp, IconGift, IconShieldCheck, IconAlertTriangle, IconShieldX,
+  IconTrendingDown, IconTrendingUp, IconGift, IconShieldCheck, IconAlertTriangle,
   IconArrowUp, IconArrowDown, IconArrowsUpDown, IconCheck, IconX, IconEqual, IconPlus, IconMinus, IconMath,
   IconTerminal2, IconPlayerPlay, IconHistory, IconArrowRight, IconBrain
 } from "@tabler/icons-react"
