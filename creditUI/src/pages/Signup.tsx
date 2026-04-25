@@ -19,7 +19,7 @@ export default function Signup() {
     setError("")
 
     try {
-      const response = await api.post("/api/users", { name, email, password })
+      const response = await api.post("/api/users/signup", { name, email, password })
       login(response.data)
       navigate("/")
     } catch (err: any) {

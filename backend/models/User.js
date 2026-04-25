@@ -42,7 +42,6 @@ const userSchema = new mongoose.Schema({
   }],
 });
 
-// Hash password before saving (async hook: do not use next(); Mongoose 9 omits it)
 userSchema.pre('save', async function () {
   if (!this.isModified('password')) return;
   const salt = await bcrypt.genSalt(10);
