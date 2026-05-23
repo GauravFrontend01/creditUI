@@ -36,6 +36,7 @@ interface Statement {
   availableLimit?: { val: number }
   outstandingTotal?: { val: number }
   minPaymentDue?: { val: number }
+  paymentDueDate?: { val: string }
   transactions?: { 
     _id: string; 
     amount?: number; 
@@ -66,6 +67,43 @@ const utilizationColor = (pct: number) => {
   if (pct >= 80) return "text-red-600 bg-red-50"
   if (pct >= 50) return "text-amber-600 bg-amber-50"
   return "text-emerald-600 bg-emerald-50"
+}
+
+const utilizationBarColor = (pct: number) => {
+  if (pct >= 80) return "bg-red-500"
+  if (pct >= 50) return "bg-amber-400"
+  return "bg-emerald-500"
+}
+
+type PortfolioDetailKind = "limit" | "debt" | "utilization" | "minDue"
+
+interface CardPortfolioRow {
+  key: string
+  bankName: string
+  accNum: string
+  creditLimit: number
+  outstanding: number
+  availableLimit: number
+  minDue: number
+  paymentDueDate: string
+  utilizationPct: number
+  latestStatementId: string
+  periodLabel: string
+}
+
+function parseDueDateMs(dateStr?: string): number {
+  if (!dateStr?.trim()) return Number.POSITIVE_INFINITY
+  const d = new Date(dateStr)
+  if (!isNaN(d.getTime())) return d.getTime()
+  const m = dateStr.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/)
+  if (m) {
+    const day = Number(m[1])
+    const month = Number(m[2]) - 1
+    const year = Number(m[3].length === 2 ? `20${m[3]}` : m[3])
+    const dt = new Date(year, month, day)
+    if (!isNaN(dt.getTime())) return dt.getTime()
+  }
+  return Number.POSITIVE_INFINITY
 }
 
 /**
@@ -265,15 +303,31 @@ function StatCard({
   value,
   sub,
   color,
+  onClick,
 }: {
   icon: any
   label: string
   value: string
   sub?: string
   color: string
+  onClick?: () => void
 }) {
   return (
-    <div className="bg-white rounded-2xl border border-slate-100 p-5 shadow-sm space-y-3">
+    <div
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (onClick && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault()
+          onClick()
+        }
+      }}
+      className={cn(
+        "bg-white rounded-2xl border border-slate-100 p-5 shadow-sm space-y-3 text-left w-full",
+        onClick && "cursor-pointer hover:shadow-md hover:border-primary/25 active:scale-[0.99] transition-all"
+      )}
+    >
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{label}</p>
         <div className={cn("h-8 w-8 rounded-xl flex items-center justify-center", color)}>
@@ -282,6 +336,9 @@ function StatCard({
       </div>
       <p className="text-xl font-bold text-slate-900 tabular-nums">{value}</p>
       {sub && <p className="text-xs text-slate-400 font-semibold">{sub}</p>}
+      {onClick && (
+        <p className="text-[9px] font-bold text-primary/70 uppercase tracking-widest">Tap for breakdown</p>
+      )}
     </div>
   )
 }
@@ -313,6 +370,7 @@ export default function StatementsList() {
   const [bulkOpen, setBulkOpen] = React.useState(false)
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
   const [bulkDeleting, setBulkDeleting] = React.useState(false)
+  const [portfolioDetail, setPortfolioDetail] = React.useState<PortfolioDetailKind | null>(null)
 
   const selectAllIds = React.useCallback(() => {
     setSelectedIds(new Set(statements.map((s) => s._id)))
@@ -455,6 +513,78 @@ export default function StatementsList() {
   const totalMinDue = creditStatements.reduce((s, st) => s + (st.minPaymentDue?.val ?? 0), 0)
   const avgUtil = totalCreditLimit > 0 ? Math.round((totalOutstanding / totalCreditLimit) * 100) : 0
 
+  /** Latest completed credit-card statement per bank × account (meaningful per-card view). */
+  const cardPortfolioRows = React.useMemo((): CardPortfolioRow[] => {
+    const rows: CardPortfolioRow[] = []
+
+    groupedDataAll.forEach((group) => {
+      const creditItems = group.items.filter(
+        (s) => s.type !== "BANK" && (s.status === "COMPLETED" || !s.status)
+      )
+      if (!creditItems.length) return
+
+      const latest = [...creditItems].sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      )[0]
+
+      const creditLimit = latest.creditLimit?.val ?? 0
+      const outstanding = latest.outstandingTotal?.val ?? 0
+      const utilizationPct = creditLimit > 0 ? Math.round((outstanding / creditLimit) * 100) : 0
+
+      rows.push({
+        key: `${group.name}-${group.accNum}`,
+        bankName: group.name,
+        accNum: group.accNum,
+        creditLimit,
+        outstanding,
+        availableLimit: latest.availableLimit?.val ?? 0,
+        minDue: latest.minPaymentDue?.val ?? 0,
+        paymentDueDate: latest.paymentDueDate?.val ?? "",
+        utilizationPct,
+        latestStatementId: latest._id,
+        periodLabel:
+          latest.statementPeriod?.from && latest.statementPeriod?.to
+            ? `${formatDate(latest.statementPeriod.from)} — ${formatDate(latest.statementPeriod.to)}`
+            : formatDate(latest.createdAt),
+      })
+    })
+
+    return rows.sort((a, b) => a.bankName.localeCompare(b.bankName))
+  }, [groupedDataAll])
+
+  const portfolioDetailMeta = React.useMemo(() => {
+    const configs: Record<
+      PortfolioDetailKind,
+      { title: string; description: string; icon: typeof IconCreditCard; color: string }
+    > = {
+      limit: {
+        title: "Portfolio Limit",
+        description: "Credit limit per card from your most recent statement in each account.",
+        icon: IconCreditCard,
+        color: "bg-blue-50 text-blue-600",
+      },
+      debt: {
+        title: "Combined Debt",
+        description: "Outstanding balance per card and share of total portfolio debt.",
+        icon: IconAlertCircle,
+        color: "bg-red-50 text-red-500",
+      },
+      utilization: {
+        title: "Utilization",
+        description: "How much of each card limit you have used (latest statement per account).",
+        icon: IconTrendingUp,
+        color: avgUtil >= 80 ? "bg-red-100 text-red-600" : "bg-emerald-50 text-emerald-600",
+      },
+      minDue: {
+        title: "Upcoming Minimum Due",
+        description: "Minimum payment and due date per card (latest statement).",
+        icon: IconReceipt2,
+        color: "bg-amber-50 text-amber-600",
+      },
+    }
+    return configs
+  }, [avgUtil])
+
   const vendorRulesByKey = React.useMemo(() => {
     const m = new Map<string, VendorRuleRow>()
     for (const r of vendorRules) {
@@ -593,12 +723,185 @@ export default function StatementsList() {
 
         {statements.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
-            <StatCard icon={IconCreditCard} label="Portfolio Limit" value={fmt(totalCreditLimit)} sub={`Across ${groupedData.length} Banks`} color="bg-blue-50 text-blue-600" />
-            <StatCard icon={IconAlertCircle} label="Combined Debt" value={fmt(totalOutstanding)} sub="Live aggregate" color="bg-red-50 text-red-500" />
-            <StatCard icon={IconTrendingUp} label="Utilization" value={`${avgUtil}%`} sub={avgUtil >= 80 ? "Critical usage" : "Safe range"} color={avgUtil >= 80 ? "bg-red-100 text-red-600" : "bg-emerald-50 text-emerald-600"} />
-            <StatCard icon={IconReceipt2} label="Upcoming Min" value={fmt(totalMinDue)} sub="Priority focus" color="bg-amber-50 text-amber-600" />
+            <StatCard icon={IconCreditCard} label="Portfolio Limit" value={fmt(totalCreditLimit)} sub={`Across ${cardPortfolioRows.length} card${cardPortfolioRows.length === 1 ? "" : "s"}`} color="bg-blue-50 text-blue-600" onClick={() => setPortfolioDetail("limit")} />
+            <StatCard icon={IconAlertCircle} label="Combined Debt" value={fmt(totalOutstanding)} sub="Live aggregate" color="bg-red-50 text-red-500" onClick={() => setPortfolioDetail("debt")} />
+            <StatCard icon={IconTrendingUp} label="Utilization" value={`${avgUtil}%`} sub={avgUtil >= 80 ? "Critical usage" : "Safe range"} color={avgUtil >= 80 ? "bg-red-100 text-red-600" : "bg-emerald-50 text-emerald-600"} onClick={() => setPortfolioDetail("utilization")} />
+            <StatCard icon={IconReceipt2} label="Upcoming Min" value={fmt(totalMinDue)} sub="Priority focus" color="bg-amber-50 text-amber-600" onClick={() => setPortfolioDetail("minDue")} />
           </div>
         )}
+
+        <Dialog open={portfolioDetail !== null} onOpenChange={(open) => !open && setPortfolioDetail(null)}>
+          <DialogContent className="max-w-lg max-h-[85vh] flex flex-col p-0 gap-0 overflow-hidden rounded-[2rem]">
+            {portfolioDetail && (() => {
+              const meta = portfolioDetailMeta[portfolioDetail]
+              const MetaIcon = meta.icon
+              const headerTotal =
+                portfolioDetail === "limit" ? fmt(totalCreditLimit)
+                  : portfolioDetail === "debt" ? fmt(totalOutstanding)
+                    : portfolioDetail === "utilization" ? `${avgUtil}%`
+                      : fmt(totalMinDue)
+
+              const sortedRows = [...cardPortfolioRows]
+              if (portfolioDetail === "utilization") {
+                sortedRows.sort((a, b) => b.utilizationPct - a.utilizationPct)
+              } else if (portfolioDetail === "debt") {
+                sortedRows.sort((a, b) => b.outstanding - a.outstanding)
+              } else if (portfolioDetail === "minDue") {
+                sortedRows.sort((a, b) => {
+                  const da = parseDueDateMs(a.paymentDueDate)
+                  const db = parseDueDateMs(b.paymentDueDate)
+                  if (da !== db) return da - db
+                  return b.minDue - a.minDue
+                })
+              } else {
+                sortedRows.sort((a, b) => b.creditLimit - a.creditLimit)
+              }
+
+              return (
+                <>
+                  <DialogHeader className="px-6 pt-6 pb-4 border-b border-slate-100 shrink-0">
+                    <div className="flex items-start gap-4">
+                      <div className={cn("h-12 w-12 rounded-2xl flex items-center justify-center shrink-0", meta.color)}>
+                        <MetaIcon size={22} />
+                      </div>
+                      <div className="space-y-1 min-w-0">
+                        <DialogTitle className="text-xl font-black text-slate-900 tracking-tight">
+                          {meta.title}
+                        </DialogTitle>
+                        <DialogDescription className="text-xs font-medium text-slate-500 leading-relaxed">
+                          {meta.description}
+                        </DialogDescription>
+                        <p className="text-2xl font-black text-slate-900 tabular-nums pt-2">{headerTotal}</p>
+                      </div>
+                    </div>
+                  </DialogHeader>
+
+                  <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3">
+                    {sortedRows.length === 0 ? (
+                      <p className="text-sm font-semibold text-slate-400 text-center py-8">
+                        No credit card statements yet.
+                      </p>
+                    ) : (
+                      sortedRows.map((row) => {
+                        const debtShare = totalOutstanding > 0
+                          ? Math.round((row.outstanding / totalOutstanding) * 100)
+                          : 0
+
+                        return (
+                          <button
+                            key={row.key}
+                            type="button"
+                            onClick={() => navigate(`/statements/${row.latestStatementId}`)}
+                            className="w-full text-left rounded-2xl border border-slate-100 bg-slate-50/40 hover:bg-white hover:border-primary/20 hover:shadow-sm p-4 transition-all"
+                          >
+                            <div className="flex items-start justify-between gap-3 mb-2">
+                              <div className="min-w-0">
+                                <p className="text-sm font-black text-slate-900 truncate">{row.bankName}</p>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate">
+                                  {row.accNum ? `•••• ${row.accNum.slice(-4)}` : "Card account"} · {row.periodLabel}
+                                </p>
+                              </div>
+                              {portfolioDetail === "limit" && (
+                                <span className="text-sm font-black text-blue-600 tabular-nums shrink-0">{fmt(row.creditLimit)}</span>
+                              )}
+                              {portfolioDetail === "debt" && (
+                                <span className="text-sm font-black text-red-600 tabular-nums shrink-0">{fmt(row.outstanding)}</span>
+                              )}
+                              {portfolioDetail === "utilization" && (
+                                <span className={cn("text-sm font-black tabular-nums shrink-0 px-2 py-0.5 rounded-lg", utilizationColor(row.utilizationPct))}>
+                                  {row.utilizationPct}%
+                                </span>
+                              )}
+                              {portfolioDetail === "minDue" && (
+                                <span className="text-sm font-black text-amber-700 tabular-nums shrink-0">{fmt(row.minDue)}</span>
+                              )}
+                            </div>
+
+                            {portfolioDetail === "limit" && (
+                              <div className="grid grid-cols-2 gap-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                <div>
+                                  <span className="block text-slate-400">Available</span>
+                                  <span className="text-slate-800 tabular-nums normal-case text-xs font-black">
+                                    {row.availableLimit > 0 ? fmt(row.availableLimit) : "—"}
+                                  </span>
+                                </div>
+                                <div className="text-right">
+                                  <span className="block text-slate-400">Outstanding</span>
+                                  <span className="text-slate-800 tabular-nums normal-case text-xs font-black">{fmt(row.outstanding)}</span>
+                                </div>
+                              </div>
+                            )}
+
+                            {portfolioDetail === "debt" && (
+                              <div className="space-y-1.5">
+                                <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                  <span>Share of total debt</span>
+                                  <span className="text-slate-700">{debtShare}%</span>
+                                </div>
+                                <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                                  <div className="h-full bg-red-400 rounded-full transition-all" style={{ width: `${Math.min(100, debtShare)}%` }} />
+                                </div>
+                                <p className="text-[10px] font-semibold text-slate-500">
+                                  Limit {fmt(row.creditLimit)} · {row.utilizationPct}% utilized
+                                </p>
+                              </div>
+                            )}
+
+                            {portfolioDetail === "utilization" && (
+                              <div className="space-y-1.5">
+                                <div className="flex justify-between text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                  <span>{fmt(row.outstanding)} of {fmt(row.creditLimit)}</span>
+                                  <span className={utilizationColor(row.utilizationPct).split(" ")[0]}>
+                                    {row.utilizationPct >= 80 ? "Critical" : row.utilizationPct >= 50 ? "Moderate" : "Safe"}
+                                  </span>
+                                </div>
+                                <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+                                  <div
+                                    className={cn("h-full rounded-full transition-all", utilizationBarColor(row.utilizationPct))}
+                                    style={{ width: `${Math.min(100, row.utilizationPct)}%` }}
+                                  />
+                                </div>
+                                {row.availableLimit > 0 && (
+                                  <p className="text-[10px] font-semibold text-slate-500">Available {fmt(row.availableLimit)}</p>
+                                )}
+                              </div>
+                            )}
+
+                            {portfolioDetail === "minDue" && (
+                              <div className="flex items-center justify-between gap-3 pt-0.5">
+                                <div>
+                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Payment due</p>
+                                  <p className="text-xs font-black text-slate-800">
+                                    {row.paymentDueDate ? formatDate(row.paymentDueDate) : "Date not on statement"}
+                                  </p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Outstanding</p>
+                                  <p className="text-xs font-black text-slate-700 tabular-nums">{fmt(row.outstanding)}</p>
+                                </div>
+                              </div>
+                            )}
+                          </button>
+                        )
+                      })
+                    )}
+                  </div>
+
+                  <DialogFooter className="px-6 py-4 border-t border-slate-100 bg-slate-50/50 shrink-0">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="rounded-xl font-bold w-full"
+                      onClick={() => setPortfolioDetail(null)}
+                    >
+                      Close
+                    </Button>
+                  </DialogFooter>
+                </>
+              )
+            })()}
+          </DialogContent>
+        </Dialog>
 
         {/* ── Portfolio Analytics Dashboard ──────────────────────────────────── */}
         {statements.length > 0 && (
