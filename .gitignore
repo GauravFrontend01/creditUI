@@ -1,0 +1,35 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Root level ignores
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsprojk
+*.sln
+*.sw?
+
+# Frontend (creditUI)
+creditUI/node_modules
+creditUI/dist
+creditUI/dist-ssr
+creditUI/*.local
+creditUI/.env
+
+# Backend
+backend/node_modules
+backend/.env
+backend/dist
+backend/venv-ocr
+backend/__pycache__
+backend/*.pyc
+backend/service-account.json
