@@ -159,7 +159,11 @@ const Upload = () => {
   const { user } = useAuth();
   const [file, setFile] = useState<File | null>(null);
   const [password, setPassword] = useState('');
+  const [showManualPassword, setShowManualPassword] = useState(false);
+  const [manualPwStatus, setManualPwStatus] = useState<'idle' | 'checking' | 'ok' | 'bad'>('idle');
   const [autoUnlockStatus, setAutoUnlockStatus] = useState<'idle' | 'checking' | 'success' | 'failed'>('idle');
+  const manualPwCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPwToastRef = useRef<'ok' | 'bad' | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [errorHeader, setErrorHeader] = useState('');
   const [statementType, setStatementType] = useState<'CREDIT_CARD' | 'BANK'>('CREDIT_CARD');
@@ -290,12 +294,58 @@ const Upload = () => {
     setSearchParams({}, { replace: true });
   }, [searchParams, setSearchParams]);
 
+  const showPwToast = (message: string, ok: boolean) => {
+    if (ok) toast.success(message, { position: 'bottom-left', duration: 2000 });
+    else toast.error(message, { position: 'bottom-left', duration: 2000 });
+  };
+
+  useEffect(() => {
+    if (!file || autoUnlockStatus !== 'failed') {
+      setManualPwStatus('idle');
+      lastPwToastRef.current = null;
+      return;
+    }
+    const pwd = password.trim();
+    if (!pwd) {
+      setManualPwStatus('idle');
+      lastPwToastRef.current = null;
+      return;
+    }
+
+    if (manualPwCheckTimer.current) clearTimeout(manualPwCheckTimer.current);
+    manualPwCheckTimer.current = setTimeout(async () => {
+      setManualPwStatus('checking');
+      const working = await canOpenPdfWithPassword(file, pwd, true);
+      if (working) {
+        setManualPwStatus('ok');
+        if (working !== pwd) setPassword(working);
+        if (lastPwToastRef.current !== 'ok') {
+          lastPwToastRef.current = 'ok';
+          showPwToast('Password correct', true);
+        }
+      } else {
+        setManualPwStatus('bad');
+        if (lastPwToastRef.current !== 'bad') {
+          lastPwToastRef.current = 'bad';
+          showPwToast('Incorrect password', false);
+        }
+      }
+    }, 600);
+
+    return () => {
+      if (manualPwCheckTimer.current) clearTimeout(manualPwCheckTimer.current);
+    };
+  }, [password, file, autoUnlockStatus]);
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
 
     setFile(selectedFile);
     setPassword('');
+    setShowManualPassword(false);
+    setManualPwStatus('idle');
+    lastPwToastRef.current = null;
     setErrorHeader('');
     setAutoUnlockStatus('checking');
 
@@ -382,7 +432,12 @@ const Upload = () => {
       navigate(`/statements/${data._id}`);
     } catch (err: any) {
       console.error('Manual upload failed', err);
-      setErrorHeader(err.response?.data?.message || err.message || "Auditing failed to initialize.");
+      const msg = err.response?.data?.message || err.message || "Auditing failed to initialize.";
+      setErrorHeader(msg);
+      if (autoUnlockStatus === 'failed' || /password|incorrect|unlock/i.test(msg)) {
+        setManualPwStatus('bad');
+        showPwToast('Incorrect password', false);
+      }
     } finally {
       setIsUploading(false);
     }
@@ -855,14 +910,40 @@ const Upload = () => {
                     {(autoUnlockStatus === 'failed' || (autoUnlockStatus === 'success' && password)) && (
                       <div className="relative">
                         <input
-                          type="password"
+                          type={showManualPassword ? 'text' : 'password'}
                           placeholder="Enter PDF password"
-                          className="flex h-10 w-full rounded-xl border border-primary/10 bg-background px-3 py-2 pl-9 pr-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20"
+                          className={cn(
+                            'flex h-10 w-full rounded-xl border bg-background px-3 py-2 pl-9 pr-16 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/20',
+                            manualPwStatus === 'ok'
+                              ? 'border-emerald-500/40'
+                              : manualPwStatus === 'bad'
+                                ? 'border-red-400/50'
+                                : 'border-primary/10'
+                          )}
                           value={password}
                           disabled={autoUnlockStatus === 'success'}
-                          onChange={(e) => setPassword(e.target.value)}
+                          onChange={(e) => {
+                            setPassword(e.target.value);
+                            setManualPwStatus('idle');
+                            lastPwToastRef.current = null;
+                          }}
                         />
                         <IconLock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                          {manualPwStatus === 'checking' && (
+                            <IconLoader2 size={16} className="animate-spin text-muted-foreground" />
+                          )}
+                          {manualPwStatus === 'ok' && <IconCheck size={16} className="text-emerald-500" strokeWidth={3} />}
+                          {manualPwStatus === 'bad' && <IconX size={16} className="text-red-500" strokeWidth={3} />}
+                          <button
+                            type="button"
+                            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                            onClick={() => setShowManualPassword((v) => !v)}
+                            title={showManualPassword ? 'Hide password' : 'Show password'}
+                          >
+                            {showManualPassword ? <IconEyeOff size={14} /> : <IconEye size={14} />}
+                          </button>
+                        </div>
                       </div>
                     )}
 

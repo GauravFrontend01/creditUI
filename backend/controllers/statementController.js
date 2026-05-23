@@ -6,6 +6,7 @@ const {
   refreshSignedUrl,
   reIngestStatementById,
   applyExtraction,
+  recalculateStatementReconciliation,
 } = require('../services/statementPipelineService');
 
 function toIsoDate(d) {
@@ -290,6 +291,37 @@ exports.reIngestStatement = async (req, res) => {
     const msg = error.message || 'Re-ingest failed';
     if (msg === 'Statement not found') return res.status(404).json({ message: msg });
     res.status(500).json({ message: msg });
+  }
+};
+
+/**
+ * @route PUT /api/statements/:id/transactions/:txId/math-exclude
+ * Toggle whether a transaction is included in reconciliation math.
+ */
+exports.toggleTransactionMathExclude = async (req, res) => {
+  try {
+    const statement = await Statement.findById(req.params.id);
+    if (!statement || statement.user.toString() !== req.user._id.toString()) {
+      return res.status(404).json({ message: 'Statement not found' });
+    }
+
+    const tx = statement.transactions.id(req.params.txId);
+    if (!tx) {
+      return res.status(404).json({ message: 'Transaction not found' });
+    }
+
+    const excluded = req.body?.excluded;
+    tx.excludedFromMath = typeof excluded === 'boolean' ? excluded : !tx.excludedFromMath;
+    statement.markModified('transactions');
+
+    recalculateStatementReconciliation(statement);
+    await statement.save();
+
+    const pdfStorageUrl = await refreshSignedUrl(statement.pdfFileName, statement.pdfStorageUrl);
+    res.json({ ...statement.toObject(), pdfStorageUrl });
+  } catch (error) {
+    console.error('toggleTransactionMathExclude', error);
+    res.status(500).json({ message: 'Server error' });
   }
 };
 

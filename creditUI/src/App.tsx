@@ -33,7 +33,7 @@ export function App() {
             }
           />
         </Routes>
-        <Toaster position="top-right" closeButton richColors />
+        <Toaster position="bottom-left" duration={2000} closeButton richColors />
       </BrowserRouter>
     </AuthProvider>
   )

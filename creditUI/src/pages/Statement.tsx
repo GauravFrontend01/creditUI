@@ -8,7 +8,8 @@ import {
   IconReceipt2, IconChartBar, IconCreditCard, IconCalendar,
   IconTrendingDown, IconTrendingUp, IconGift, IconShieldCheck, IconAlertTriangle,
   IconArrowUp, IconArrowDown, IconArrowsUpDown, IconCheck, IconX, IconEqual, IconPlus, IconMinus, IconMath,
-  IconTerminal2, IconPlayerPlay, IconHistory, IconArrowRight, IconBrain
+  IconTerminal2, IconPlayerPlay, IconHistory, IconArrowRight, IconBrain,
+  IconCircleMinus, IconCirclePlus
 } from "@tabler/icons-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -49,8 +50,15 @@ interface Transaction {
   isRecurring?: boolean
   isForex?: boolean
   isInternal?: boolean
+  excludedFromMath?: boolean
   box: number[]
   page: number
+}
+
+const TOAST_DURATION_MS = 2000
+
+function txCountsForMath(t: Transaction) {
+  return !t.excludedFromMath
 }
 
 interface EmiItem {
@@ -203,6 +211,8 @@ function buildColumns(
   vendorExtras?: {
     getVendorLabel: (tx: Transaction) => string
     onVendorLabelBlur: (tx: Transaction, value: string) => void
+    onToggleMathExclude?: (tx: Transaction) => void
+    showMathExclude?: boolean
   }
 ): ColumnDef<Transaction>[] {
   const isBank = type === 'BANK';
@@ -356,6 +366,36 @@ function buildColumns(
     );
   }
 
+  if (vendorExtras?.showMathExclude && vendorExtras.onToggleMathExclude) {
+    baseColumns.push({
+      id: 'mathExclude',
+      header: () => <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Math</span>,
+      cell: ({ row }) => {
+        const tx = row.original
+        const excluded = !!tx.excludedFromMath
+        return (
+          <button
+            type="button"
+            className={cn(
+              'h-7 w-7 rounded-lg border flex items-center justify-center transition-colors',
+              excluded
+                ? 'border-slate-200 bg-slate-50 text-slate-400 hover:bg-slate-100'
+                : 'border-primary/20 bg-primary/5 text-primary hover:bg-primary/10'
+            )}
+            title={excluded ? 'Include in math totals' : 'Exclude from math (e.g. opening balance row)'}
+            onClick={(e) => {
+              e.stopPropagation()
+              vendorExtras.onToggleMathExclude?.(tx)
+            }}
+          >
+            {excluded ? <IconCirclePlus size={14} strokeWidth={2.5} /> : <IconCircleMinus size={14} strokeWidth={2.5} />}
+          </button>
+        )
+      },
+      enableSorting: false,
+    })
+  }
+
   // Add common end columns (flags, locate)
   baseColumns.push(
     {
@@ -441,6 +481,13 @@ function Statement() {
   const [txGlobalFilter, setTxGlobalFilter] = useState("")
   const [activeFooterFilter, setActiveFooterFilter] = useState<'debit' | 'credit' | 'fees' | null>(null)
   const [toast, setToast] = useState<{ message: string, visible: boolean, type: 'success' | 'error' }>({ message: "", visible: false, type: 'success' })
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    setToast({ message, visible: true, type })
+    toastTimerRef.current = setTimeout(() => setToast((prev) => ({ ...prev, visible: false })), TOAST_DURATION_MS)
+  }
   const [showMathDetails, setShowMathDetails] = useState(false);
   const [reprocessing, setReprocessing] = useState(false);
   const [showVault, setShowVault] = useState(false);
@@ -668,11 +715,9 @@ function Statement() {
     try {
       await api.put(`/api/statements/${id}/approve`)
       setData(prev => prev ? { ...prev, isApproved: true, isUserRejected: false } : null)
-      setToast({ message: 'Forensic Audit Approved', visible: true, type: 'success' })
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000)
+      showToast('Forensic Audit Approved', 'success')
     } catch (e: any) {
-      setToast({ message: 'Approval failed: ' + (e.message || "Unknown error"), visible: true, type: 'error' })
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000)
+      showToast('Approval failed: ' + (e.message || "Unknown error"), 'error')
     }
   }
 
@@ -681,11 +726,9 @@ function Statement() {
     try {
       await api.put(`/api/statements/${id}/reject`)
       setData(prev => prev ? { ...prev, isApproved: false, isUserRejected: true } : null)
-      setToast({ message: 'Marked as not accepted', visible: true, type: 'success' })
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000)
+      showToast('Marked as not accepted', 'success')
     } catch (e: any) {
-      setToast({ message: 'Update failed: ' + (e.message || 'Unknown error'), visible: true, type: 'error' })
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000)
+      showToast('Update failed: ' + (e.message || 'Unknown error'), 'error')
     }
   }
 
@@ -748,6 +791,44 @@ function Statement() {
     }
   }
 
+  const handleToggleMathExclude = async (tx: Transaction) => {
+    if (!id || id === 'preview' || !tx._id) return
+    const nextExcluded = !tx.excludedFromMath
+    setData((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        transactions: prev.transactions.map((t) =>
+          t._id === tx._id ? { ...t, excludedFromMath: nextExcluded } : t
+        ),
+      }
+    })
+    try {
+      const { data: updated } = await api.put(`/api/statements/${id}/transactions/${tx._id}/math-exclude`, {
+        excluded: nextExcluded,
+      })
+      setData(updated)
+      const msg = nextExcluded
+        ? 'Excluded from math totals'
+        : 'Included in math totals again'
+      showToast(
+        updated.extractionQuality === 'verified' ? `${msg} — Math OK` : msg,
+        updated.extractionQuality === 'verified' ? 'success' : 'success'
+      )
+    } catch (e: any) {
+      setData((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          transactions: prev.transactions.map((t) =>
+            t._id === tx._id ? { ...t, excludedFromMath: !nextExcluded } : t
+          ),
+        }
+      })
+      showToast(e.response?.data?.message || 'Could not update math exclusion', 'error')
+    }
+  }
+
   const txColumns = buildColumns(
     data?.currency ? getCurrencySymbol(data.currency) : '₹',
     handleCategoryUpdate,
@@ -755,6 +836,8 @@ function Statement() {
     {
       getVendorLabel: (tx) => vendorRulesByKey.get(txRuleKey(tx))?.vendorLabel ?? '',
       onVendorLabelBlur: handleVendorLabelBlur,
+      onToggleMathExclude: handleToggleMathExclude,
+      showMathExclude: isSavedView && !!id && id !== 'preview',
     }
   )
 
@@ -764,12 +847,10 @@ function Statement() {
       setReprocessing(true);
       const res = await api.post(`/api/statements/${id}/reprocess`, { targetType: forensicType });
       setData(res.data.statement);
-      setToast({ message: "Audit re-mapped successfully", visible: true, type: 'success' });
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+      showToast("Audit re-mapped successfully", 'success');
     } catch (error: any) {
       console.error(error);
-      setToast({ message: error.response?.data?.message || "Failed to re-sync audit", visible: true, type: 'error' });
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+      showToast(error.response?.data?.message || "Failed to re-sync audit", 'error');
     } finally {
       setReprocessing(false);
     }
@@ -782,11 +863,9 @@ function Statement() {
       const { data: d } = await api.post(`/api/statements/${id}/re-ingest`);
       setData(d);
       if (d.type) setForensicType(d.type);
-      setToast({ message: "Re-ingestion cycle initiated", visible: true, type: "success" });
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+      showToast("Re-ingestion cycle initiated", 'success');
     } catch (error: any) {
-      setToast({ message: error.response?.data?.message || "Re-ingestion failed", visible: true, type: "error" });
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+      showToast(error.response?.data?.message || "Re-ingestion failed", 'error');
     } finally {
       setReprocessing(false);
     }
@@ -801,12 +880,10 @@ function Statement() {
       setData(res.data.statement);
       setShowVault(false);
       setInjectedJson('');
-      setToast({ message: "Cyber Injection Successful", visible: true, type: 'success' });
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+      showToast("Cyber Injection Successful", 'success');
     } catch (e: any) {
       console.error(e);
-      setToast({ message: "Invalid JSON Payload", visible: true, type: 'error' });
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+      showToast("Invalid JSON Payload", 'error');
     } finally {
       setReprocessing(false);
     }
@@ -849,7 +926,7 @@ function Statement() {
           navigate(`/statements/${newId}`);
         } else {
           console.error("[Statement] Sync failed - no statement created", syncRes);
-          setToast({ message: "Sync failed", visible: true, type: 'error' });
+          showToast("Sync failed", 'error');
         }
       } else if (manualData) {
         const parsed = JSON.parse(manualData);
@@ -885,7 +962,7 @@ function Statement() {
       }
     } catch (err: any) {
       console.error(err);
-      setToast({ message: err.response?.data?.message || err.message || "Audit failed to start", visible: true, type: 'error' });
+      showToast(err.response?.data?.message || err.message || "Audit failed to start", 'error');
     } finally {
       setSendingToAI(false);
     }
@@ -938,8 +1015,7 @@ function Statement() {
       window.URL.revokeObjectURL(url);
     } catch (e) {
       console.error('Download failed', e);
-      setToast({ message: "Failed to download unlocked PDF", visible: true, type: 'error' });
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+      showToast("Failed to download unlocked PDF", 'error');
     }
   };
 
@@ -950,8 +1026,7 @@ function Statement() {
     }
     
     console.log(`[Forensic] Packaging ${pages.length} images for backend reassembly...`);
-    setToast({ message: "Reconstructing forensic PDF...", visible: true, type: 'success' });
-    setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 2000);
+    showToast("Reconstructing forensic PDF...", 'success');
 
     try {
       // Get the image URLs (handles both simple strings or objects with 'image' property)
@@ -976,8 +1051,7 @@ function Statement() {
       window.URL.revokeObjectURL(url);
     } catch (e) {
       console.error('Forensic rebuild failed', e);
-      setToast({ message: "PDF reconstruction failed. Standard download attempted.", visible: true, type: 'error' });
-      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+      showToast("PDF reconstruction failed. Standard download attempted.", 'error');
     }
   };
 
@@ -1090,13 +1164,13 @@ function Statement() {
   // Compute totals directly from transactions — always matches what user sees
   // ROOT CAUSE FIX: Exclude merchant EMIs (mostly SBI Card "FP EMI") and Internal Transfers from sums
   const txTotalDebits = txs
-    .filter(t => t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI') && !t.isInternal && t.category !== 'Transfer')
+    .filter(t => txCountsForMath(t) && t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI') && !t.isInternal && t.category !== 'Transfer')
     .reduce((s, t) => s + (t.amount || t.withdrawal || 0), 0)
   const txTotalCredits = txs
-    .filter(t => t.type === 'Credit' && !t.isInternal && t.category !== 'Transfer')
+    .filter(t => txCountsForMath(t) && t.type === 'Credit' && !t.isInternal && t.category !== 'Transfer')
     .reduce((s, t) => s + (t.amount || t.deposit || 0), 0)
   const txTotalFees = txs
-    .filter(t => t.category === 'Fee' && t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI'))
+    .filter(t => txCountsForMath(t) && t.category === 'Fee' && t.type === 'Debit' && !t.description?.toUpperCase().includes('FP EMI'))
     .reduce((s, t) => s + (t.amount || 0), 0)
 
 
@@ -1617,6 +1691,7 @@ function Statement() {
                         id={`tx-row-${tx._id || tx.description}`}
                         className={cn(
                           'cursor-pointer border-b border-slate-50 h-12 transition-colors',
+                          tx.excludedFromMath && 'opacity-50 bg-slate-50/80',
                           isActive ? 'bg-amber-50' : 'hover:bg-slate-50/60'
                         )}
                         onClick={() => handleTxRowClick(tx)}
@@ -2093,7 +2168,7 @@ function Statement() {
 
       {/* Global Toast */}
       {toast.visible && (
-        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[1000] animate-in slide-in-from-bottom-4 duration-300">
+        <div className="fixed bottom-8 left-8 z-[1000] animate-in slide-in-from-left-4 duration-300">
           <div className={cn(
             "text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border backdrop-blur-md",
             toast.type === 'success' ? "bg-slate-900 border-white/10" : "bg-red-600 border-red-400/20"
@@ -2142,8 +2217,7 @@ function Statement() {
                       setActiveBox({ box: field.box, page: field.page, id: 'opening' })
                       document.getElementById(`pdf-page-${field.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
                     } else {
-                      setToast({ message: "Bounding box not identified for Opening Balance", visible: true, type: 'error' });
-                      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+                      showToast("Bounding box not identified for Opening Balance", 'error');
                     }
                   }}
                 >
@@ -2189,8 +2263,7 @@ function Statement() {
                       setActiveBox({ box: field.box, page: field.page, id: 'closing' })
                       document.getElementById(`pdf-page-${field.page}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
                     } else {
-                      setToast({ message: "Bounding box not identified for Closing Balance", visible: true, type: 'error' });
-                      setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 4000);
+                      showToast("Bounding box not identified for Closing Balance", 'error');
                     }
                   }}
                 >
@@ -2218,6 +2291,12 @@ function Statement() {
                   {data.reconciliation.transactionCount} Extracted
                 </span>
               </div>
+
+              {!data.reconciliation.matched && (
+                <p className="text-[11px] font-semibold text-slate-500 leading-relaxed">
+                  If the error equals one row (e.g. opening balance counted as a transaction), use the <span className="font-black text-slate-700">Math</span> column in the table to exclude that row from totals.
+                </p>
+              )}
 
               {data.reconciliation.reasons && data.reconciliation.reasons.length > 0 && (
                 <div className="bg-red-50/50 border border-red-100/50 rounded-2xl p-5 space-y-3 mt-4">
@@ -2286,8 +2365,7 @@ function Statement() {
                 className="rounded-xl border-white/10 text-white hover:bg-white/5"
                 onClick={() => {
                   navigator.clipboard.writeText(JSON.stringify(data.rawAIResponse, null, 2));
-                  setToast({ message: "Payload copied to clipboard", visible: true, type: 'success' });
-                  setTimeout(() => setToast(prev => ({ ...prev, visible: false })), 3000);
+                  showToast("Payload copied to clipboard", 'success');
                 }}
               >
                 Copy JSON
