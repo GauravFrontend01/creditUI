@@ -26,7 +26,6 @@ export function App() {
                     <Route path="/statement" element={<Statement />} />
                     <Route path="/statements" element={<StatementsList />} />
                     <Route path="/statements/:id" element={<Statement />} />
-                    <Route path="/upload" element={<Upload />} />
                    </Routes>
                 </DashboardLayout>
               </ProtectedRoute>

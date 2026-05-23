@@ -541,7 +541,7 @@ function Statement() {
             if (parsed.statementType) setForensicType(parsed.statementType);
           }
         } else {
-          navigate('/upload')
+          navigate('/')
         }
         return;
       }
@@ -1369,7 +1369,7 @@ function Statement() {
                 
                 <Button 
                   variant="ghost" 
-                  onClick={() => navigate('/upload')}
+                  onClick={() => navigate('/')}
                   className="text-slate-400 font-bold hover:text-slate-600"
                 >
                   Cancel & Go Back
