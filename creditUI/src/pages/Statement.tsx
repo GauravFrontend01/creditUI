@@ -541,7 +541,7 @@ function Statement() {
             if (parsed.statementType) setForensicType(parsed.statementType);
           }
         } else {
-          navigate('/')
+          navigate('/upload')
         }
         return;
       }
@@ -585,7 +585,7 @@ function Statement() {
             emiList: parsed.emiList || []
           })
           loadPdfFromBase64(b64, pass || '')
-        } else navigate('/')
+        } else navigate('/upload')
       }
     }
     load()
@@ -1189,7 +1189,7 @@ function Statement() {
         {/* Toolbar */}
         <div className="h-12 bg-white border-b px-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400" onClick={() => navigate(isSavedView ? '/statements' : '/')}>
+            <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400" onClick={() => navigate(isSavedView ? '/statements' : '/upload')}>
               <IconArrowLeft size={16} />
             </Button>
             <div className="h-3 w-px bg-slate-200" />
@@ -1369,7 +1369,7 @@ function Statement() {
                 
                 <Button 
                   variant="ghost" 
-                  onClick={() => navigate('/')}
+                  onClick={() => navigate('/upload')}
                   className="text-slate-400 font-bold hover:text-slate-600"
                 >
                   Cancel & Go Back

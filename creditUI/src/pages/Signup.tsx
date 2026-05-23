@@ -31,7 +31,7 @@ export default function Signup() {
         password
       })
       login(response.data)
-      navigate("/")
+      navigate("/dashboard")
     } catch (err: any) {
       setError(err.response?.data?.message || "Something went wrong")
       setErrorField(err.response?.data?.field || "")

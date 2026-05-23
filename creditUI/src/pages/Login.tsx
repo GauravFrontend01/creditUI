@@ -20,7 +20,7 @@ export default function Login() {
     try {
       const response = await api.post("/api/users/login", { email, password })
       login(response.data)
-      navigate("/")
+      navigate("/dashboard")
     } catch (err: any) {
       setError(err.response?.data?.message || "Something went wrong")
     } finally {

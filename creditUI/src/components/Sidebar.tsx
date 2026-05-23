@@ -1,7 +1,15 @@
 import * as React from "react"
 import { Link, useLocation } from "react-router-dom"
 import { useAuth } from "@/context/AuthContext"
-import { IconLayoutSidebar, IconHome, IconChevronLeft, IconChevronRight, IconFileText, IconLogout } from "@tabler/icons-react"
+import {
+  IconLayoutSidebar,
+  IconLayoutDashboard,
+  IconUpload,
+  IconChevronLeft,
+  IconChevronRight,
+  IconFileText,
+  IconLogout,
+} from "@tabler/icons-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
@@ -26,7 +34,8 @@ export function Sidebar({ expanded, setExpanded, className }: SidebarProps) {
   }
 
   const items = [
-    { icon: IconHome, label: "Home", href: "/" },
+    { icon: IconLayoutDashboard, label: "Dashboard", href: "/dashboard" },
+    { icon: IconUpload, label: "Upload", href: "/upload" },
     { icon: IconFileText, label: "My Statements", href: "/statements" },
   ]
 
@@ -52,7 +61,9 @@ export function Sidebar({ expanded, setExpanded, className }: SidebarProps) {
       <div className="flex-1 overflow-y-auto overflow-x-hidden pt-4 pb-2 px-2 scrollbar-none">
          <nav className="space-y-1">
             {items.map((item) => {
-              const isActive = location.pathname === item.href
+              const isActive =
+                location.pathname === item.href ||
+                (item.href === "/dashboard" && location.pathname === "/")
               return (
                 <Link
                   key={item.label}

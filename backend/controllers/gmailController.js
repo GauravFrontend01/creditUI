@@ -248,7 +248,7 @@ async function classifyAndExtractHintsUnifiedWithGemini(candidatesWithBodies) {
 const FRONTEND = () => (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 
 function redirectWithMessage(res, params) {
-  const u = new URL(`${FRONTEND()}/`);
+  const u = new URL(`${FRONTEND()}/upload`);
   Object.entries(params).forEach(([k, v]) => u.searchParams.set(k, v));
   return res.redirect(302, u.toString());
 }
