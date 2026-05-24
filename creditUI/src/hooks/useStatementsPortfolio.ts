@@ -5,7 +5,6 @@ import {
   type Statement,
   type VendorRuleRow,
   type CardPortfolioRow,
-  type StatementGroupData,
   buildGroupedData,
   formatDate,
 } from "@/lib/statementShared"

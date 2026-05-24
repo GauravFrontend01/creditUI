@@ -29,16 +29,16 @@ export default function Login() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
-      <div className="w-full max-w-md space-y-8 rounded-2xl border border-border bg-card p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-background px-4 py-8 sm:py-12">
+      <div className="w-full max-w-md space-y-7 sm:space-y-8 rounded-lg border border-border bg-card p-6 sm:p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
         <div className="text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-foreground">Welcome Back</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">Welcome Back</h2>
           <p className="mt-2 text-sm text-muted-foreground">Please sign in to your account</p>
         </div>
 
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           {error && (
-            <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive border border-destructive/20 animate-in fade-in slide-in-from-top-1">
+            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive border border-destructive/20 animate-in fade-in slide-in-from-top-1">
               {error}
             </div>
           )}
@@ -51,7 +51,7 @@ export default function Login() {
               <input
                 type="email"
                 required
-                className="block w-full rounded-lg border border-input bg-background py-3 pl-10 pr-3 text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 sm:text-sm transition-all duration-200"
+                className="block w-full rounded-md border border-input bg-background py-3 pl-10 pr-3 text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 sm:text-sm transition-all duration-200"
                 placeholder="Email address"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -65,7 +65,7 @@ export default function Login() {
               <input
                 type="password"
                 required
-                className="block w-full rounded-lg border border-input bg-background py-3 pl-10 pr-3 text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 sm:text-sm transition-all duration-200"
+                className="block w-full rounded-md border border-input bg-background py-3 pl-10 pr-3 text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 sm:text-sm transition-all duration-200"
                 placeholder="Password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -77,7 +77,7 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
-              className="group relative flex w-full justify-center rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-70 transition-all duration-200"
+              className="group relative flex w-full justify-center rounded-md bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-70 transition-all duration-200"
             >
               {loading ? (
                 <IconLoader2 className="h-5 w-5 animate-spin" />

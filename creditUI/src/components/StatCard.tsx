@@ -28,17 +28,17 @@ export function StatCard({
         }
       }}
       className={cn(
-        "bg-white rounded-2xl border border-slate-100 p-5 shadow-sm space-y-3 text-left w-full",
-        onClick && "cursor-pointer hover:shadow-md hover:border-primary/25 active:scale-[0.99] transition-all"
+        "bg-white rounded-lg border border-slate-200/80 p-4 sm:p-5 shadow-xs space-y-3 text-left w-full",
+        onClick && "cursor-pointer hover:shadow-sm hover:border-primary/25 active:scale-[0.99] transition-all"
       )}
     >
       <div className="flex items-center justify-between">
         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{label}</p>
-        <div className={cn("h-8 w-8 rounded-xl flex items-center justify-center", color)}>
+        <div className={cn("h-8 w-8 rounded-md flex items-center justify-center shadow-inner", color)}>
           <Icon size={16} />
         </div>
       </div>
-      <p className="text-xl font-bold text-slate-900 tabular-nums">{value}</p>
+      <p className="text-lg font-bold text-slate-900 tabular-nums break-words sm:text-xl">{value}</p>
       {sub && <p className="text-xs text-slate-400 font-semibold">{sub}</p>}
       {onClick && (
         <p className="text-[9px] font-bold text-primary/70 uppercase tracking-widest">Tap for breakdown</p>

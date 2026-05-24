@@ -9,13 +9,13 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const [expanded, setExpanded] = React.useState(false)
 
   return (
-    <div className="flex min-h-screen bg-background">
+    <div className="flex min-h-[100dvh] bg-background">
       {/* 
         This is the "Push" container. 
         It stays at w-16 (64px) whether the actual sidebar is expanded or not.
         This provides the 50px-ish gap the user mentioned.
       */}
-      <div className="w-16 min-w-16 shrink-0 h-screen pointer-events-none" />
+      <div className="hidden md:block w-16 min-w-16 shrink-0 h-screen pointer-events-none" />
       
       {/* 
         The actual Sidebar component is fixed. 
@@ -24,7 +24,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       */}
       <Sidebar expanded={expanded} setExpanded={setExpanded} />
 
-      <main className="flex-1 min-w-0 h-screen bg-background relative overflow-auto">
+      <main className="flex-1 min-w-0 h-[100dvh] bg-background relative overflow-auto pb-20 md:pb-0">
         {children}
       </main>
     </div>

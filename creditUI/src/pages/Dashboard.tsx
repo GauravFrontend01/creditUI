@@ -43,7 +43,7 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center h-screen bg-slate-50 gap-4">
+      <div className="flex min-h-[100dvh] flex-col items-center justify-center gap-4 bg-slate-50 px-4">
         <IconLoader2 className="h-10 w-10 animate-spin text-primary" />
         <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Loading dashboard…</p>
       </div>
@@ -52,10 +52,10 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-[#F8FAFC] font-sans">
-      <div className="max-w-[1600px] mx-auto px-8 py-10 space-y-10">
-        <div className="flex items-center justify-between">
+      <div className="max-w-[1600px] mx-auto px-4 py-5 sm:px-6 lg:px-8 lg:py-10 space-y-6 lg:space-y-10">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-4xl font-black tracking-tight text-slate-900">Dashboard</h1>
+            <h1 className="text-3xl font-black tracking-tight text-slate-900 sm:text-4xl">Dashboard</h1>
             <p className="text-sm text-slate-500 mt-1 font-medium italic">
               Portfolio overview across {statements.length} statement
               {statements.length === 1 ? "" : "s"}
@@ -63,15 +63,15 @@ export default function Dashboard() {
           </div>
           <Button
             onClick={() => navigate("/upload")}
-            className="rounded-2xl px-6 h-12 gap-2 shadow-lg shadow-primary/20 font-black text-sm uppercase tracking-wider"
+            className="h-11 w-full rounded-md px-5 gap-2 shadow-sm font-bold text-xs uppercase tracking-wider cursor-pointer sm:h-10 sm:w-auto"
           >
-            <IconPlus size={18} strokeWidth={3} /> New Audit
+            <IconPlus size={16} strokeWidth={3} /> New Audit
           </Button>
         </div>
 
         {statements.length > 0 ? (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 sm:gap-6 animate-in fade-in slide-in-from-bottom-4 duration-700">
               <StatCard
                 icon={IconCreditCard}
                 label="Portfolio Limit"
@@ -106,22 +106,22 @@ export default function Dashboard() {
               />
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 lg:gap-8">
               <div className="lg:col-span-2 space-y-6">
-                <div className="bg-white rounded-[2.5rem] border border-slate-100 p-8 shadow-sm flex flex-col h-full">
-                  <div className="flex items-center justify-between mb-8">
+                <div className="bg-white rounded-lg border border-slate-200/80 p-4 sm:p-8 shadow-xs flex flex-col h-full">
+                  <div className="flex items-start justify-between gap-4 mb-6 sm:mb-8">
                     <div className="space-y-1">
-                      <h3 className="text-xl font-black text-slate-900 tracking-tight">Financial Velocity</h3>
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
+                      <h3 className="text-xl font-black text-slate-900 tracking-tight leading-none">Financial Velocity</h3>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-1.5">
                         Net Capital Movement • Consolidated
                       </p>
                     </div>
-                    <div className="h-10 w-10 rounded-xl bg-slate-50 flex items-center justify-center text-slate-400">
-                      <IconTrendingUp size={20} />
+                    <div className="h-8 w-8 rounded-md bg-slate-50 border border-slate-200/60 flex items-center justify-center text-slate-400 shadow-inner">
+                      <IconTrendingUp size={16} />
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-8 mb-8">
+                  <div className="grid grid-cols-1 gap-4 mb-6 sm:grid-cols-3 sm:gap-8 sm:mb-8">
                     <div className="space-y-2">
                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
                         Consolidated Income
@@ -154,21 +154,21 @@ export default function Dashboard() {
                     </div>
                   </div>
 
-                  <div className="flex-1 min-h-[140px] bg-slate-50/50 rounded-3xl border border-dashed border-slate-200 flex items-center justify-center relative overflow-hidden group">
+                  <div className="flex-1 min-h-[140px] bg-slate-50/50 rounded-lg border border-dashed border-slate-200 flex items-center justify-center relative overflow-hidden group shadow-2xs">
                     <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
                     <div className="text-center space-y-2 relative z-10 p-6">
                       <p className="text-xs font-bold text-slate-500 max-w-[280px] leading-relaxed">
                         Across all accounts, your net position this cycle is{" "}
                         <span
                           className={cn(
-                            "px-1.5 py-0.5 rounded-lg text-white font-black",
+                            "px-1.5 py-0.5 rounded text-white font-black text-[10px] leading-none inline-block border border-transparent",
                             portfolioAnalytics.netFlow >= 0 ? "bg-emerald-500" : "bg-amber-500"
                           )}
                         >
                           {portfolioAnalytics.netFlow >= 0 ? "Surplus" : "Deficit"}
                         </span>
                       </p>
-                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-[0.2em] mt-4">
+                      <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider mt-4">
                         Forensic Liquidity Score: <span className="text-slate-800">84/100</span>
                       </p>
                     </div>
@@ -176,7 +176,7 @@ export default function Dashboard() {
                       {[40, 70, 45, 90, 65, 80, 55, 95, 75, 85].map((h, i) => (
                         <div
                           key={i}
-                          className="flex-1 bg-primary rounded-t-lg transition-all duration-1000 group-hover:h-full"
+                          className="flex-1 bg-primary rounded-t-sm transition-all duration-1000 group-hover:h-full"
                           style={{ height: `${h}%` }}
                         />
                       ))}
@@ -185,19 +185,18 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              <div className="bg-white rounded-[2.5rem] border border-slate-100 p-8 shadow-sm space-y-8">
+              <div className="bg-white rounded-lg border border-slate-200/80 p-4 sm:p-8 shadow-xs space-y-6 sm:space-y-8 flex flex-col justify-between">
                 <div className="space-y-1">
-                  <h3 className="text-xl font-black text-slate-900 tracking-tight">Spending IQ</h3>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
+                  <h3 className="text-xl font-black text-slate-900 tracking-tight leading-none">Spending IQ</h3>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-1.5">
                     Categorical Attribution
                   </p>
-                  <p className="text-[10px] text-slate-400 font-medium leading-snug pt-1">
-                    Hover a category to see merchants and custom vendor tags. Set tags on any statement’s
-                    transaction row.
+                  <p className="text-[10px] text-slate-500 font-medium leading-relaxed pt-2">
+                    Tap a category to see merchants and custom vendor tags from your statement rows.
                   </p>
                 </div>
 
-                <div className="space-y-5">
+                <div className="space-y-5 flex-1 mt-6">
                   {portfolioAnalytics.categoryList.length > 0 ? (
                     portfolioAnalytics.categoryList.slice(0, 6).map((cat, i) => {
                       const pct =
@@ -225,9 +224,10 @@ export default function Dashboard() {
                       return (
                         <div
                           key={cat.name}
-                          className="relative space-y-2 rounded-2xl px-1 -mx-1 transition-colors"
+                          className="relative space-y-2 rounded-md px-1 -mx-1 transition-colors cursor-pointer"
                           onMouseEnter={onSpendCatEnter}
                           onMouseLeave={onSpendCatLeave}
+                          onClick={() => setSpendHoverCat((current) => current === cat.name ? null : cat.name)}
                         >
                           <div className="flex items-center justify-between gap-2">
                             <div className="flex items-center gap-2 min-w-0">
@@ -251,10 +251,10 @@ export default function Dashboard() {
                               {fmt(cat.amount)}
                             </span>
                           </div>
-                          <div className="relative h-1.5 w-full bg-slate-50 rounded-full overflow-hidden">
+                          <div className="relative h-1.5 w-full bg-slate-50 rounded overflow-hidden">
                             <div
                               className={cn(
-                                "absolute inset-y-0 left-0 rounded-full transition-all duration-1000",
+                                "absolute inset-y-0 left-0 rounded transition-all duration-1000",
                                 i === 0
                                   ? "bg-primary"
                                   : i === 1
@@ -274,9 +274,10 @@ export default function Dashboard() {
 
                           {openSpend && (
                             <div
-                              className="absolute left-0 right-0 top-full z-40 mt-1 rounded-2xl border border-slate-100 bg-white p-3 shadow-xl shadow-slate-200/60"
+                              className="fixed inset-x-4 bottom-24 z-40 rounded-lg border border-slate-200 bg-white p-3 shadow-xl shadow-slate-200/60 sm:absolute sm:left-0 sm:right-0 sm:top-full sm:bottom-auto sm:mt-1"
                               onMouseEnter={onSpendCatEnter}
                               onMouseLeave={onSpendCatLeave}
+                              onClick={(e) => e.stopPropagation()}
                             >
                               {vendors.length === 0 ? (
                                 <p className="text-[11px] text-slate-500 font-medium">
@@ -284,7 +285,7 @@ export default function Dashboard() {
                                 </p>
                               ) : (
                                 <>
-                                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2">
+                                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-2 leading-none">
                                     Vendors & tags
                                   </p>
                                   <ul className="max-h-44 space-y-1.5 overflow-y-auto pr-0.5">
@@ -334,19 +335,19 @@ export default function Dashboard() {
             </div>
           </>
         ) : (
-          <div className="py-32 flex flex-col items-center justify-center bg-white rounded-[3rem] border border-dashed border-slate-200 text-slate-300 gap-4">
-            <div className="h-20 w-20 rounded-3xl bg-slate-50 flex items-center justify-center">
-              <IconReceipt2 size={40} className="opacity-20" />
+          <div className="py-16 sm:py-24 px-4 flex flex-col items-center justify-center bg-white rounded-lg border border-dashed border-slate-200 text-slate-300 gap-4 shadow-2xs">
+            <div className="h-16 w-16 rounded-md bg-slate-50 border border-slate-200 flex items-center justify-center shadow-2xs">
+              <IconReceipt2 size={32} className="opacity-20 text-slate-400" />
             </div>
             <div className="text-center">
-              <p className="text-lg font-black text-slate-400">No statements yet</p>
-              <p className="text-sm font-bold text-slate-300 mt-1 uppercase tracking-widest">
+              <p className="text-base font-bold text-slate-700">No statements yet</p>
+              <p className="text-xs font-semibold text-slate-400 mt-1 uppercase tracking-wider">
                 Upload a PDF to see your dashboard
               </p>
             </div>
             <Button
               onClick={() => navigate("/upload")}
-              className="mt-4 rounded-xl px-8 h-12 font-bold"
+              className="mt-2 rounded-md px-6 h-10 font-bold text-xs uppercase tracking-wider cursor-pointer shadow-sm"
             >
               Upload statement
             </Button>

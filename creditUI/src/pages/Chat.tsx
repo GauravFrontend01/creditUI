@@ -295,10 +295,10 @@ const Chat: React.FC = () => {
 
   return (
     <div className="flex h-[calc(100vh-6rem)] items-center justify-center p-4">
-      <Card className="flex h-full w-full max-w-2xl flex-col bg-background/50 backdrop-blur-sm border shadow-xl animate-in fade-in zoom-in duration-500">
+      <Card className="flex h-full w-full max-w-2xl flex-col bg-background/50 backdrop-blur-sm border border-slate-200 rounded-lg shadow-xl animate-in fade-in zoom-in duration-500">
         <CardHeader className="border-b px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary border border-primary/20 shadow-inner">
+            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-primary/10 text-primary border border-primary/20 shadow-inner">
               <IconRobot size={22} className="animate-pulse" />
             </div>
             <div>
@@ -333,17 +333,17 @@ const Chat: React.FC = () => {
                     m.role === "user" ? "flex-row-reverse" : "flex-row"
                   )}>
                     <div className={cn(
-                      "flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-full border shadow-sm",
-                      m.role === "user" ? "bg-primary text-primary-foreground" : "bg-card text-card-foreground"
+                      "flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-md border shadow-2xs",
+                      m.role === "user" ? "bg-primary text-primary-foreground border-transparent" : "bg-card text-card-foreground border-slate-200"
                     )}>
                       {m.role === "user" ? <IconUser size={14} /> : <IconRobot size={14} />}
                     </div>
                     <div
                       className={cn(
-                        "rounded-2xl px-4 py-2.5 text-sm shadow-sm ring-1 ring-inset transition-all",
+                        "rounded-md px-4 py-2.5 text-sm shadow-2xs border",
                         m.role === "user"
-                          ? "bg-primary text-primary-foreground ring-primary/20 rounded-br-none"
-                          : "bg-card text-card-foreground ring-border/50 rounded-bl-none"
+                          ? "bg-primary text-primary-foreground border-transparent rounded-br-none"
+                          : "bg-card text-card-foreground border-slate-200 rounded-bl-none"
                       )}
                     >
                       {m.content.split('\n').map((line, idx) => (
@@ -356,10 +356,10 @@ const Chat: React.FC = () => {
               {isLoading && (
                 <div className="flex justify-start animate-in fade-in duration-300">
                   <div className="flex max-w-[85%] items-center gap-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full border bg-card text-card-foreground">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-card text-card-foreground">
                       <IconRobot size={14} />
                     </div>
-                    <div className="rounded-2xl bg-card px-4 py-2.5 text-sm ring-1 ring-border/50 rounded-bl-none">
+                    <div className="rounded-md bg-card px-4 py-2.5 text-sm border border-slate-200 rounded-bl-none shadow-2xs">
                       <IconLoader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                     </div>
                   </div>
@@ -382,15 +382,15 @@ const Chat: React.FC = () => {
               placeholder="Kuch bhi bol..."
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              className="flex-1 bg-background border-border/50 focus-visible:ring-primary/20 rounded-xl h-11"
+              className="flex-1 bg-background border-slate-200 focus-visible:ring-primary/20 rounded-md h-10"
             />
             <Button
               type="submit"
               size="icon"
               disabled={!input.trim() || isLoading}
-              className="rounded-xl h-11 w-11 shrink-0 bg-primary hover:bg-primary/90 transition-all active:scale-95"
+              className="rounded-md h-10 w-10 shrink-0 bg-primary hover:bg-primary/90 transition-all active:scale-95 cursor-pointer shadow-sm"
             >
-              <IconSend size={18} />
+              <IconSend size={16} />
               <span className="sr-only">Send</span>
             </Button>
           </form>
