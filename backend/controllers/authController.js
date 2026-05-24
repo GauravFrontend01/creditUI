@@ -12,8 +12,8 @@ const generateToken = (id) => {
 // @route   POST /api/users/signup
 // @access  Public
 exports.registerUser = async (req, res) => {
-  const { name, email, password } = req.body;
-  console.log('Registration attempt:', { name, email });
+  const { name, email, password, panName, panDOB } = req.body;
+  console.log('Registration attempt:', { name, email, panName, panDOB });
 
   try {
     let userExists;
@@ -25,13 +25,15 @@ exports.registerUser = async (req, res) => {
     }
 
     if (userExists) {
-      return res.status(400).json({ message: 'User already exists' });
+      return res.status(400).json({ message: 'Email address is already registered', field: 'email' });
     }
 
     let user;
     try {
       user = await User.create({
-        name,
+        name: name || panName, // fallback to avoid empty name in generic queries
+        panName,
+        panDOB,
         email,
         password,
       });
@@ -44,6 +46,8 @@ exports.registerUser = async (req, res) => {
       res.status(201).json({
         _id: user._id,
         name: user.name,
+        panName: user.panName,
+        panDOB: user.panDOB,
         email: user.email,
         token: generateToken(user._id),
       });
@@ -69,6 +73,8 @@ exports.loginUser = async (req, res) => {
       res.json({
         _id: user._id,
         name: user.name,
+        panName: user.panName,
+        panDOB: user.panDOB,
         email: user.email,
         token: generateToken(user._id),
       });

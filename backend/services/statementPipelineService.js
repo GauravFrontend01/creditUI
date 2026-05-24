@@ -233,7 +233,8 @@ function normalizeTransactions(rows) {
 }
 
 function buildReconciliation(normalized, statementType) {
-  const tx = Array.isArray(normalized.transactions) ? normalized.transactions : [];
+  const tx = (Array.isArray(normalized.transactions) ? normalized.transactions : [])
+    .filter((t) => !t.excludedFromMath);
   const isBank = statementType === 'BANK';
 
   const extractedDebits = tx.reduce((sum, t) => {
@@ -267,6 +268,10 @@ function buildReconciliation(normalized, statementType) {
   if (balanceDelta > 0.5) reasons.push(`Closing mismatch: expected ${expectedClosing.toFixed(2)} vs calculated ${calculatedClosing.toFixed(2)}.`);
   if (expectedDebits !== null && debitDelta > 0.5) reasons.push(`Debit mismatch: expected ${expectedDebits.toFixed(2)} vs extracted ${extractedDebits.toFixed(2)}.`);
   if (expectedCredits !== null && creditDelta > 0.5) reasons.push(`Credit mismatch: expected ${expectedCredits.toFixed(2)} vs extracted ${extractedCredits.toFixed(2)}.`);
+  const allTx = Array.isArray(normalized.transactions) ? normalized.transactions : [];
+  const excludedCount = allTx.filter((t) => t.excludedFromMath).length;
+  if (excludedCount > 0) reasons.push(`${excludedCount} transaction(s) excluded from math by user.`);
+
   const missingBbox = tx.filter((t) => !t.box?.length || !t.page).length;
   if (missingBbox > 0) reasons.push(`${missingBbox} transaction(s) missing bounding boxes.`);
 
@@ -283,7 +288,7 @@ function buildReconciliation(normalized, statementType) {
     extractedCredits: Number(extractedCredits.toFixed(2)),
     extractedDeposits: Number(extractedCredits.toFixed(2)),
     extractedWithdrawals: Number(extractedDebits.toFixed(2)),
-    transactionCount: tx.length,
+    transactionCount: allTx.length,
     continuityErrors: 0,
     duplicateCount: 0,
     reasons,
@@ -659,9 +664,25 @@ async function reIngestStatementById(userId, statementId) {
   }
 }
 
+function recalculateStatementReconciliation(statement) {
+  const normalized = {
+    transactions: statement.transactions || [],
+    openingBalance: statement.openingBalance,
+    closingBalance: statement.closingBalance ?? statement.outstandingTotal,
+    reconciliationSummary: statement.reconciliationSummary,
+  };
+  const rec = buildReconciliation(normalized, statement.type);
+  statement.reconciliation = rec;
+  if (rec.matched) statement.extractionQuality = 'verified';
+  else if (rec.balanceDelta <= 10) statement.extractionQuality = 'minor_mismatch';
+  else statement.extractionQuality = 'extraction_error';
+  return rec;
+}
+
 module.exports = {
   processStatementPdf,
   refreshSignedUrl,
   reIngestStatementById,
   applyExtraction,
+  recalculateStatementReconciliation,
 };

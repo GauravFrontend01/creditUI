@@ -6,6 +6,14 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  panName: {
+    type: String,
+    required: true,
+  },
+  panDOB: {
+    type: String,
+    required: true,
+  },
   email: {
     type: String,
     required: true,

@@ -10,6 +10,7 @@ const {
   rejectStatement,
   reIngestStatement,
   reprocessStatement,
+  toggleTransactionMathExclude,
 } = require('../controllers/statementController');
 const { protect } = require('../middleware/authMiddleware');
 
@@ -34,6 +35,7 @@ router.put('/:id/approve', protect, approveStatement);
 router.put('/:id/reject', protect, rejectStatement);
 router.post('/:id/re-ingest', protect, reIngestStatement);
 router.post('/:id/reprocess', protect, reprocessStatement);
+router.put('/:id/transactions/:txId/math-exclude', protect, toggleTransactionMathExclude);
 router.get('/:id', protect, getStatementById);
 
 module.exports = router;

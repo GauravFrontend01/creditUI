@@ -16,6 +16,8 @@ const transactionSchema = new mongoose.Schema({
   isRecurring: Boolean,
   isForex: Boolean,
   isInternal: Boolean,
+  /** When true, this row is omitted from debit/credit/closing reconciliation math. */
+  excludedFromMath: { type: Boolean, default: false },
   box: boxField,
   page: Number,
 });

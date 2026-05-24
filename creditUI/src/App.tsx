@@ -1,8 +1,9 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom"
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom"
 import { DashboardLayout } from "@/components/DashboardLayout"
 import Statement from "@/pages/Statement"
 import Login from "@/pages/Login"
 import Signup from "@/pages/Signup"
+import Dashboard from "@/pages/Dashboard"
 import StatementsList from "@/pages/StatementsList"
 import Upload from "@/pages/Upload"
 import { AuthProvider } from "@/context/AuthContext"
@@ -22,18 +23,19 @@ export function App() {
               <ProtectedRoute>
                 <DashboardLayout>
                   <Routes>
-                    <Route path="/" element={<Upload />} />
+                    <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                    <Route path="/dashboard" element={<Dashboard />} />
+                    <Route path="/upload" element={<Upload />} />
                     <Route path="/statement" element={<Statement />} />
                     <Route path="/statements" element={<StatementsList />} />
                     <Route path="/statements/:id" element={<Statement />} />
-                    <Route path="/upload" element={<Upload />} />
                    </Routes>
                 </DashboardLayout>
               </ProtectedRoute>
             }
           />
         </Routes>
-        <Toaster position="top-right" closeButton richColors />
+        <Toaster position="bottom-left" duration={2000} closeButton richColors />
       </BrowserRouter>
     </AuthProvider>
   )
