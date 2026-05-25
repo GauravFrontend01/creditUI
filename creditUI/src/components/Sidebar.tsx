@@ -62,9 +62,7 @@ export function Sidebar({ expanded, setExpanded, className }: SidebarProps) {
         <div className="flex-1 overflow-y-auto overflow-x-hidden pt-4 pb-2 px-2 scrollbar-none">
           <nav className="space-y-1">
               {items.map((item) => {
-                const isActive =
-                  location.pathname === item.href ||
-                  (item.href === "/dashboard" && location.pathname === "/")
+                const isActive = location.pathname === item.href
                 return (
                   <Link
                     key={item.label}
@@ -127,9 +125,7 @@ export function Sidebar({ expanded, setExpanded, className }: SidebarProps) {
       <nav className="fixed inset-x-0 bottom-0 z-50 border-t border-slate-200 bg-background/95 px-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] pt-2 shadow-[0_-10px_30px_rgba(15,23,42,0.08)] backdrop-blur md:hidden">
         <div className="mx-auto grid max-w-md grid-cols-4 gap-1">
           {items.map((item) => {
-            const isActive =
-              location.pathname === item.href ||
-              (item.href === "/dashboard" && location.pathname === "/")
+            const isActive = location.pathname === item.href
             return (
               <Link
                 key={item.label}
